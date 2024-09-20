@@ -3,132 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
+    <link rel="stylesheet" href="/static/js/style.css">
     <title>Rice Bag Detection</title>
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <style>
         
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            
-            margin: 0;
-            padding: 20px;
-            background-color: #f4f4f4;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        h1, h2 {
-            color: #333;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        .form-group input,
-        .form-group select,
-        .form-group textarea {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        .job {
-            background-color: #f9f9f9;
-            border: 1px solid #ddd;
-            padding: 15px;
-            margin-bottom: 15px;
-            border-radius: 5px;
-        }
-        button {
-            background-color: #4CAF50;
-            border: none;
-            color: white;
-            padding: 10px 15px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 14px;
-            margin: 4px 2px;
-            cursor: pointer;
-            border-radius: 4px;
-        }
-        button.stop {
-            background-color: #f44336;
-        }
-        .video-container {
-            margin-top: 10px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            text-align: left;
-            padding: 8px;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background-color: #4CAF50;
-            color: white;
-        }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .form-row { display: flex; justify-content: space-between; }
-        .form-column { width: 48%; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; }
-        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px; box-sizing: border-box; }
-        .job { border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; }
-        .video-container { margin-top: 10px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        .pagination { display: flex; justify-content: center; margin-top: 20px; }
-        .pagination button { margin: 0 10px; }
-        .job-buttons {display: flex; justify-content: space-between; margin-bottom: 20px;}
-        .job-buttons button {width: 48%;}
-        .progress-bar {width: 100%; background-color: #f3f3f3; padding: 3px; border-radius: 3px;
-            box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
-            margin-top: 10px;
-        }
-        .progress-bar-fill {
-            display: block;
-            height: 22px;
-            background-color: #659cef;
-            border-radius: 3px;
-            transition: width 500ms ease-in-out;
-        }
-
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        .frame-container {
-            margin-top: 10px;
-            text-align: center;
-        }
-        .frame-container img {
-            max-width: 100%;
-            height: auto;
-        }
-        .loading-indicator {display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #3498db;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-left: 10px;}
-        @keyframes spin {0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }}
+       
     </style>
 </head>
 <body>
@@ -232,7 +113,7 @@
             <button @click="updateLine(id)">Update Line</button>
        </div>
 
-        <h2>Job Results</h2>
+        
         <div class="table-container">
             <table v-if="jobResults.length > 0">
                 <caption>Job Results</caption>
