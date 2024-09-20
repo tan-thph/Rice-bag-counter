@@ -233,40 +233,42 @@
        </div>
 
         <h2>Job Results</h2>
-        <table v-if="jobResults.length > 0">
-            <thead>
-                <tr>
-                    <th>Date & Time</th>
-                    <th>Job Type</th>
-                    <th>Customer</th>
-                    <th>Truck</th>
-                    <th>Order Number</th>
-                    <th>Commodity</th>
-                    <th>Weight/Unit</th>
-                    
-                    <th>Final Count</th>
-                    <th>Total Weight</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr v-for="result in paginatedResults" :key="result.job_id + '-' + (result.date_time || '')">
-                    <td>{% raw %}{{ formatDateTime(result.date_time) }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.job_type || 'N/A' }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.customer_name || 'N/A' }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.truck_number || 'N/A' }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.order_number || 'N/A' }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.commodity || 'N/A' }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.weight_per_unit || 'N/A' }}{% endraw %}</td>
-                    <td>{% raw %}{{ result.final_count || '0' }}{% endraw %}</td>
-                    <td>{% raw %}{{ calculateTotalWeight(result) }}{% endraw %}</td>
-                    <td>
-                        <button @click="printJobResult(result.job_id)">Print</button>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-        <p v-else>No job results available.</p>
+        <div class="table-container">
+            <table v-if="jobResults.length > 0">
+                <caption>Job Results</caption>
+                <thead>
+                    <tr>
+                        <th>Date & Time</th>
+                        <th>Job Type</th>
+                        <th>Customer</th>
+                        <th>Truck</th>
+                        <th>Order Number</th>
+                        <th>Commodity</th>
+                        <th>Weight/Unit</th>
+                        <th>Final Count</th>
+                        <th>Total Weight</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="result in paginatedResults" :key="result.job_id + '-' + (result.date_time || '')">
+                        <td data-label="Date & Time">{% raw %}{{ formatDateTime(result.date_time) }}{% endraw %}</td>
+                        <td data-label="Job Type">{% raw %}{{ result.job_type || 'N/A' }}{% endraw %}</td>
+                        <td data-label="Customer">{% raw %}{{ result.customer_name || 'N/A' }}{% endraw %}</td>
+                        <td data-label="Truck">{% raw %}{{ result.truck_number || 'N/A' }}{% endraw %}</td>
+                        <td data-label="Order Number">{% raw %}{{ result.order_number || 'N/A' }}{% endraw %}</td>
+                        <td data-label="Commodity">{% raw %}{{ result.commodity || 'N/A' }}{% endraw %}</td>
+                        <td data-label="Weight/Unit">{% raw %}{{ result.weight_per_unit || 'N/A' }}{% endraw %}</td>
+                        <td data-label="Final Count">{% raw %}{{ result.final_count || '0' }}{% endraw %}</td>
+                        <td data-label="Total Weight">{% raw %}{{ calculateTotalWeight(result) }}{% endraw %}</td>
+                        <td data-label="Action">
+                            <button @click="printJobResult(result.job_id)">Print</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <p v-else>No job results available.</p>
+        </div>
         
         <div class="pagination" v-if="jobResults.length > 0">
             <button @click="prevPage" :disabled="currentPage === 1">Previous</button>
@@ -277,6 +279,27 @@
 
     <script id="initial-data" type="application/json">
         {{ initial_data_json | safe }}
+    </script>
+
+    <script>
+        // Function to add data-label attributes to table cells
+        function addDataLabelsToTable() {
+            const table = document.querySelector('table');
+            const headerCells = table.querySelectorAll('th');
+            const rows = table.querySelectorAll('tbody tr');
+    
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td');
+                cells.forEach((cell, index) => {
+                    if (headerCells[index]) {
+                        cell.setAttribute('data-label', headerCells[index].textContent);
+                    }
+                });
+            });
+        }
+    
+        // Call the function when the component is mounted
+        document.addEventListener('DOMContentLoaded', addDataLabelsToTable);
     </script>
 
     <script>
@@ -667,7 +690,9 @@
                     Object.keys(this.activeJobs).forEach(jobId => {
                         this.connectWebSocket(jobId);
                     });
-
+                    this.$nextTick(() => {
+                        addDataLabelsToTable();
+                    });
                     // Fetch latest job data every 5 seconds
                     setInterval(this.fetchLatestJobData, 5000);
                 },
