@@ -51,7 +51,7 @@ h1, h2 {
     padding: 8px;
     border: 1px solid #ddd;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: 14px;
     box-sizing: border-box;
 }
 
@@ -62,7 +62,7 @@ h1, h2 {
 }
 
 .form-column {
-    padding: 5px;
+    padding: 10px;
     box-sizing: border-box;
 }
 
@@ -228,7 +228,7 @@ tr:nth-child(even) {
     }
 
     table {
-        font-size: 10px;
+        font-size: 14px;
     }
 
     table thead {
