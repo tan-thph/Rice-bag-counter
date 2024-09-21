@@ -87,14 +87,13 @@
             <p>Job Type: {% raw %}{{ job.job_type }}{% endraw %}</p>
             <p>Bag Count: {% raw %}{{ job.bag_count || 0 }}{% endraw %}</p>
 
-            <button @click="captureFrame(id)" :disabled="job.isCapturing">
-                Current Position
-                <span v-if="job.isCapturing" class="loading-indicator"></span>
+            <button @click="toggleVideo(id)">
+                {% raw %}{{ job.isViewing ? 'Hide Video' : 'Show Video' }}{% endraw %}
             </button>
             <button @click="stopJob(id)" class="stop">Stop Job</button>
             
-            <div class="frame-container" v-if="job.currentFrame">
-                <img :src="job.currentFrame" alt="Current frame">
+            <div class="video-container" v-if="job.isViewing">
+                <img :src="'/video_feed/' + id" alt="Live video stream">
             </div>
             
             <div class="form-group">
@@ -113,10 +112,9 @@
             <button @click="updateLine(id)">Update Line</button>
        </div>
 
-        <h2>Job Results</h2>
+       <h2>Job Results</h2>
         <div class="table-container">
             <table v-if="jobResults.length > 0">
-                <caption>Job Results</caption>
                 <thead>
                     <tr>
                         <th>Date & Time</th>
@@ -388,16 +386,6 @@
                         }
                     } catch (error) {
                         console.error('Error fetching latest job data:', error);
-                    }
-                },
-                async captureFrame(jobId) {
-                    try {
-                        const response = await axios.get(`/capture_frame/${jobId}`, { responseType: 'blob' });
-                        const imageUrl = URL.createObjectURL(response.data);
-                        this.$set(this.activeJobs[jobId], 'currentFrame', imageUrl);
-                    } catch (error) {
-                        console.error('Error capturing frame:', error);
-                        alert('Error capturing frame: ' + (error.response?.data?.detail || error.message));
                     }
                 },
                 

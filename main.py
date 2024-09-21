@@ -5,8 +5,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor
-
-import cv2, asyncio, json, os, time, asyncio, logging, base64, uuid
+from ultralytics import YOLO
+import cv2, asyncio, json, os, time, asyncio, logging, base64, uuid, torch, traceback
 
 from detector import RiceBagDetector
 from fastapi.encoders import jsonable_encoder
@@ -17,7 +17,7 @@ from datetime import datetime
 import tempfile, io
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Union, Optional
-from threading import Lock
+from threading import Lock, Event
 from print import create_job_result_pdf
 
 app = FastAPI()
@@ -31,7 +31,7 @@ app.add_middleware(
 )
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Mount the static directory and set up templates
@@ -47,7 +47,7 @@ active_jobs = {}
 job_results = []
 connected_clients = {}
 frame_locks = {}
-
+video_job_events ={}
 
 class Job(BaseModel):
     job_type: str
@@ -65,6 +65,7 @@ class Job(BaseModel):
 class LineUpdate(BaseModel):
     new_position: Optional[float] = Field(None, ge=0, le=1)
     new_orientation: Optional[str] = Field(None, pattern='^(vertical|horizontal)$')
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -248,35 +249,57 @@ async def run_video_detection_job(job_id: str):
         return
 
     frame_locks[job_id] = Lock()
+    video_job_events[job_id] = Event()
 
     def process_frames():
         nonlocal cap, detector
-        while job_id in active_jobs:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Update detector's line position and orientation if they have changed
-            if detector.detection_line_position != active_jobs[job_id]["detection_line_position"]:
-                detector.update_line_position(active_jobs[job_id]["detection_line_position"])
-            
-            if detector.is_vertical != (active_jobs[job_id]["detection_line_orientation"] == "vertical"):
-                detector.update_line_orientation(active_jobs[job_id]["detection_line_orientation"] == "vertical")
-            
-            processed_frame, bag_count = detector.process_frame(frame)
-            
-            with frame_locks[job_id]:
-                active_jobs[job_id]["bag_count"] = bag_count
-                _, buffer = cv2.imencode('.jpg', processed_frame)
-                active_jobs[job_id]["current_frame"] = buffer.tobytes()
+        frame_count = 0
+        while job_id in active_jobs and not video_job_events[job_id].is_set():
+            try:
+                ret, frame = cap.read()
+                if not ret:
+                    logger.info(f"Reached end of video for job {job_id}")
+                    break
 
-            time.sleep(frame_time)
+                frame_count += 1
+                logger.debug(f"Processing frame {frame_count} for job {job_id}")
+                
+                # Update detector's line position and orientation if they have changed
+                if detector.detection_line_position != active_jobs[job_id]["detection_line_position"]:
+                    detector.update_line_position(active_jobs[job_id]["detection_line_position"])
+                
+                if detector.is_vertical != (active_jobs[job_id]["detection_line_orientation"] == "vertical"):
+                    detector.update_line_orientation(active_jobs[job_id]["detection_line_orientation"] == "vertical")
+                
+                processed_frame, bag_count = detector.process_frame(frame)
+                
+                with frame_locks[job_id]:
+                    active_jobs[job_id]["bag_count"] = bag_count
+                    _, buffer = cv2.imencode('.jpg', processed_frame)
+                    active_jobs[job_id]["current_frame"] = buffer.tobytes()
+
+                time.sleep(frame_time)
+
+            except Exception as e:
+                logger.error(f"Error processing frame {frame_count} for job {job_id}: {str(e)}")
+                logger.error(traceback.format_exc())
+                # If there's an error, we'll skip this frame and continue with the next one
+                continue
+
+        cap.release()
+        logger.info(f"Video job {job_id} finished processing")
+        if job_id in active_jobs:
+            final_count = active_jobs[job_id]["bag_count"]
+            job_data = active_jobs[job_id]
+            del active_jobs[job_id]
+            add_job_result(job_id, job_data, "completed", final_count)
+            update_jobs()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(process_frames)
         
         try:
-            while job_id in active_jobs:
+            while job_id in active_jobs and not video_job_events[job_id].is_set():
                 if future.done():
                     break
                 await asyncio.sleep(1)
@@ -288,15 +311,20 @@ async def run_video_detection_job(job_id: str):
                     for websocket in connected_clients[job_id]:
                         await websocket.send_json({"job_id": job_id, "bag_count": bag_count})
         
+        except Exception as e:
+            logger.error(f"Error in run_video_detection_job for job {job_id}: {str(e)}")
+            logger.error(traceback.format_exc())
+        
         finally:
-            cap.release()
+            video_job_events[job_id].set()  # Signal the thread to stop
+            try:
+                future.result()  # Wait for the thread to finish
+            except Exception as e:
+                logger.error(f"Error in process_frames thread for job {job_id}: {str(e)}")
+                logger.error(traceback.format_exc())
+            
             del frame_locks[job_id]
-            if job_id in active_jobs:
-                final_count = active_jobs[job_id]["bag_count"]
-                job_data = active_jobs[job_id]
-                del active_jobs[job_id]
-                add_job_result(job_id, job_data, "completed", final_count)
-                update_jobs()
+            del video_job_events[job_id]
             
             # Clean up the video file
             try:
@@ -427,25 +455,27 @@ async def video_feed(job_id: str):
         while job_id in active_jobs:
             frame_data = active_jobs[job_id].get("current_frame")
             if frame_data is not None:
+                # Decode the JPEG frame
+                frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+                
+                # Downscale to 144p
+                small_frame = cv2.resize(frame, (720, 480))
+                
+                # Apply some blur to reduce noise and improve compression
+                #small_frame = cv2.GaussianBlur(small_frame, (5, 5), 0)
+                
+                # Upscale back to 720p
+                large_frame = cv2.resize(small_frame, (720, 480), interpolation=cv2.INTER_LINEAR)
+                
+                # Encode to JPEG with low quality
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 20]
+                _, buffer = cv2.imencode('.jpg', large_frame, encode_param)
+                
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-            await asyncio.sleep(0.1)  # Adjust this value to control frame rate
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            await asyncio.sleep(0.033)  # Aim for ~30 FPS
 
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.get("/capture_frame/{job_id}")
-async def capture_frame(job_id: str):
-    if job_id not in active_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = active_jobs[job_id]
-    frame_data = job.get("current_frame")
-    
-    if frame_data is None:
-        raise HTTPException(status_code=404, detail="No frame available")
-    
-    return StreamingResponse(io.BytesIO(frame_data), media_type="image/jpeg")
 
 
 @app.websocket("/ws/{job_id}")
@@ -512,13 +542,16 @@ async def stop_job(job_id: str):
         job_model = Job(**{k: v for k, v in job.items() if k in Job.__annotations__})
         final_count = job["bag_count"]
         
-        if job["job_type"] == "video" and "video_path" in job:
-            try:
-                os.remove(job["video_path"])
-            except FileNotFoundError:
-                logger.warning(f"Video file not found: {job['video_path']}")
-            except Exception as e:
-                logger.error(f"Error removing video file: {str(e)}")
+        if job["job_type"] == "video":
+            if job_id in video_job_events:
+                video_job_events[job_id].set()  # Signal the video processing thread to stop
+            if "video_path" in job:
+                try:
+                    os.remove(job["video_path"])
+                except FileNotFoundError:
+                    logger.warning(f"Video file not found: {job['video_path']}")
+                except Exception as e:
+                    logger.error(f"Error removing video file: {str(e)}")
         
         del active_jobs[job_id]
         add_job_result(job_id, job_model, "stopped", final_count)
