@@ -42,6 +42,13 @@
                     <label for="weight_per_unit">Weight per Unit:</label>
                     <input v-model="newJob.weight_per_unit" id="weight_per_unit" type="number" step="0.01">
                 </div>
+                <div class="form-group">
+                    <label for="desired_direction">Desired Direction:</label>
+                    <select v-model="newJob.desired_direction" id="desired_direction">
+                        <option value="1">Loading (Left to Right)</option>
+                        <option value="-1">Unloading (Right to Left)</option>
+                    </select>
+                </div>
             </div>
             <div class="form-column">
                 <div class="form-group">
@@ -86,6 +93,7 @@
             <h3>Job: {% raw %}{{ job.customer_name }}{% endraw %} - {% raw %}{{ job.truck_number }}{% endraw %}</h3>
             <p>Job Type: {% raw %}{{ job.job_type }}{% endraw %}</p>
             <p>Bag Count: {% raw %}{{ job.bag_count || 0 }}{% endraw %}</p>
+            <p>Current Direction: {% raw %}{{ job.desired_direction === 1 ? 'Loading (Left to Right)' : 'Unloading (Right to Left)' }}{% endraw %}</p>
 
             <button @click="toggleVideo(id)">
                 {% raw %}{{ job.isViewing ? 'Hide Video' : 'Show Video' }}{% endraw %}
@@ -108,8 +116,15 @@
                     <option value="horizontal">Horizontal</option>
                 </select>
             </div>
-            
             <button @click="updateLine(id)">Update Line</button>
+            <div class="form-group">
+                <label :for="'desired-direction-' + id">Change Desired Direction:</label>
+                <select :id="'desired-direction-' + id" v-model="job.newDesiredDirection">
+                    <option value="1">Loading (Left to Right)</option>
+                    <option value="-1">Unloading (Right to Left)</option>
+                </select>
+                <button @click="updateDesiredDirection(id)">Update Direction</button>
+            </div>
        </div>
 
        <h2>Job Results</h2>
@@ -221,7 +236,8 @@
                         order_number: '',
                         note: '',
                         detection_line_orientation: 'vertical',
-                        detection_line_position: 0.5
+                        detection_line_position: 0.5,
+                        desired_direction: 1,
                     },
                     selectedFile: null,
                     uploadProgress: 0,
@@ -272,7 +288,7 @@
                     if (!this.validateForm()) {
                         return;
                     }
-                    this.isCreatingJob = true; // Add this line to show loading message
+                    this.isCreatingJob = true;
                     try {
                         if (type === 'rtsp') {
                             await this.createRTSPJob();
@@ -280,12 +296,16 @@
                             await this.createVideoJob();
                         }
                     } finally {
-                        this.isCreatingJob = false; // Add this line to hide loading message
+                        this.isCreatingJob = false;
                     }
                 },
                 async createRTSPJob() {
                     try {
-                        const response = await axios.post('/jobs', { ...this.newJob, job_type: 'rtsp' });
+                        const response = await axios.post('/jobs', { 
+                            ...this.newJob, 
+                            job_type: 'rtsp',
+                            desired_direction: parseInt(this.newJob.desired_direction)
+                        });
                         console.log('RTSP Job created:', response.data);
                         await this.fetchJobs();
                         this.resetNewJob();
@@ -298,8 +318,8 @@
                     const formData = new FormData();
                     formData.append('file', this.selectedFile);
                     Object.keys(this.newJob).forEach(key => {
-                        if (key !== 'camera') {  // Exclude camera for video jobs
-                            formData.append(key, this.newJob[key]);
+                        if (key !== 'camera') {
+                            formData.append(key, key === 'desired_direction' ? parseInt(this.newJob[key]) : this.newJob[key]);
                         }
                     });
                     formData.append('job_type', 'video');
@@ -319,11 +339,6 @@
                         this.uploadProgress = 0;
                     } catch (error) {
                         console.error('Error creating video job:', error);
-                        if (error.response) {
-                            console.error('Response data:', error.response.data);
-                            console.error('Response status:', error.response.status);
-                            console.error('Response headers:', error.response.headers);
-                        }
                         alert('Error creating video job: ' + (error.response?.data?.detail || error.message));
                     }
                 },
@@ -340,7 +355,8 @@
                         order_number: '',
                         note: '',
                         detection_line_orientation: 'vertical',
-                        detection_line_position: 0.5
+                        detection_line_position: 0.5,
+                        desired_direction: 1,
                     };
                     this.selectedFile = null;
                 },
@@ -417,6 +433,29 @@
                     } catch (error) {
                         console.error('Error updating line:', error);
                         let errorMessage = 'Error updating line';
+                        if (error.response) {
+                            errorMessage += ': ' + (error.response.data.detail || error.response.statusText);
+                        }
+                        alert(errorMessage);
+                    }
+                },
+                async updateDesiredDirection(jobId) {
+                    const job = this.activeJobs[jobId];
+                    if (job.newDesiredDirection === undefined) {
+                        alert('Please select a new desired direction');
+                        return;
+                    }
+                    
+                    try {
+                        const response = await axios.post(`/update_desired_direction/${jobId}`, {
+                            new_direction: parseInt(job.newDesiredDirection)
+                        });
+                        job.desired_direction = response.data.new_direction;
+                        delete job.newDesiredDirection;
+                        alert('Desired direction updated successfully');
+                    } catch (error) {
+                        console.error('Error updating desired direction:', error);
+                        let errorMessage = 'Error updating desired direction';
                         if (error.response) {
                             errorMessage += ': ' + (error.response.data.detail || error.response.statusText);
                         }

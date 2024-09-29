@@ -48,6 +48,9 @@ job_results = []
 connected_clients = {}
 frame_locks = {}
 video_job_events ={}
+rtsp_detectors = {}
+video_detectors = {}
+
 
 class Job(BaseModel):
     job_type: str
@@ -60,12 +63,15 @@ class Job(BaseModel):
     note: Optional[str] = None
     detection_line_orientation: str = "vertical"
     detection_line_position: float = 0.5
+    desired_direction: int = Field(1, ge=-1, le=1)
     video_path: Optional[str] = None
 
 class LineUpdate(BaseModel):
     new_position: Optional[float] = Field(None, ge=0, le=1)
     new_orientation: Optional[str] = Field(None, pattern='^(vertical|horizontal)$')
 
+class DesiredDirectionUpdate(BaseModel):
+    new_direction: int = Field(..., ge=-1, le=1)
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -86,6 +92,7 @@ async def read_root(request: Request):
 async def get_cameras():
     return cameras
 
+
 @app.post("/jobs")
 async def create_job(job: Job, background_tasks: BackgroundTasks):
     if job.job_type == "rtsp" and not job.camera:
@@ -97,10 +104,33 @@ async def create_job(job: Job, background_tasks: BackgroundTasks):
     
     if job.job_type == "rtsp":
         background_tasks.add_task(run_rtsp_detection_job, job_id)
+    elif job.job_type == "video":
+        background_tasks.add_task(run_video_detection_job, job_id)
     else:
-        raise HTTPException(status_code=400, detail="Invalid job type for this endpoint")
+        raise HTTPException(status_code=400, detail="Invalid job type")
     
-    return {"job_id": job_id, "message": "RTSP job created successfully"}
+    return {"job_id": job_id, "message": f"{job.job_type.upper()} job created successfully"}
+
+@app.post("/update_desired_direction/{job_id}")
+async def update_desired_direction(job_id: str, update: DesiredDirectionUpdate):
+    if job_id not in active_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = active_jobs[job_id]
+    job["desired_direction"] = update.new_direction
+    
+    # Update the detector's desired direction
+    if job["job_type"] == "rtsp":
+        detector = rtsp_detectors.get(job_id)
+    elif job["job_type"] == "video":
+        detector = video_detectors.get(job_id)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid job type")
+    
+    if detector:
+        detector.update_desired_direction(update.new_direction)
+    
+    return {"message": f"Desired direction updated for job {job_id}", "new_direction": update.new_direction}
 
 @app.post("/upload_video")
 async def upload_video(
@@ -114,6 +144,7 @@ async def upload_video(
     note: Optional[str] = Form(None),
     detection_line_orientation: str = Form("vertical"),
     detection_line_position: float = Form(0.5),
+    desired_direction: int = Form(1),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     if not file:
@@ -138,6 +169,7 @@ async def upload_video(
             note=note,
             detection_line_orientation=detection_line_orientation,
             detection_line_position=detection_line_position,
+            desired_direction=desired_direction,
             video_path=temp_file_path
         )
         active_jobs[job_id] = job.dict()
@@ -151,7 +183,6 @@ async def upload_video(
         return {"job_id": job_id, "message": "Video uploaded and job created successfully"}
     except Exception as e:
         logger.error(f"Error processing video upload: {str(e)}")
-        # Make sure to delete the temporary file if an error occurs
         os.unlink(temp_file_path)
         raise HTTPException(status_code=500, detail=f"Error processing video upload: {str(e)}")
 
@@ -168,7 +199,10 @@ async def run_rtsp_detection_job(job_id: str):
     job = active_jobs[job_id]
     detector = RiceBagDetector("best_n_v15_imgsz224_ep200.pt", 
                                detection_line_position=job["detection_line_position"],
-                               is_vertical=(job["detection_line_orientation"] == "vertical"))
+                               is_vertical=(job["detection_line_orientation"] == "vertical"),
+                               desired_direction=job["desired_direction"])
+    
+    rtsp_detectors[job_id] = detector  # Store the detector instance
     
     rtsp_url = cameras.get(job["camera"], job["camera"])
     cap = cv2.VideoCapture(rtsp_url)
@@ -236,7 +270,10 @@ async def run_video_detection_job(job_id: str):
     job = active_jobs[job_id]
     detector = RiceBagDetector("best_n_v15_imgsz224_ep200.pt", 
                                detection_line_position=job["detection_line_position"],
-                               is_vertical=(job["detection_line_orientation"] == "vertical"))
+                               is_vertical=(job["detection_line_orientation"] == "vertical"),
+                               desired_direction=job["desired_direction"])
+    
+    video_detectors[job_id] = detector  # Store the detector instance
     
     cap = cv2.VideoCapture(job["video_path"])
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -382,6 +419,7 @@ async def upload_video(
     note: Optional[str] = Form(None),
     detection_line_orientation: str = Form("vertical"),
     detection_line_position: float = Form(0.5),
+    desired_direction: int = Form(1),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     if not file:
@@ -404,6 +442,7 @@ async def upload_video(
             note=note,
             detection_line_orientation=detection_line_orientation,
             detection_line_position=detection_line_position,
+            desired_direction=desired_direction,
             video_path=temp_file_path
         )
         active_jobs[job_id] = job.dict()
@@ -458,11 +497,10 @@ async def video_feed(job_id: str):
                 # Decode the JPEG frame
                 frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
                 
+                # The arrow is now drawn in the RiceBagDetector class, so we don't need to modify the frame here
+                
                 # Downscale to 144p
                 small_frame = cv2.resize(frame, (720, 480))
-                
-                # Apply some blur to reduce noise and improve compression
-                #small_frame = cv2.GaussianBlur(small_frame, (5, 5), 0)
                 
                 # Upscale back to 720p
                 large_frame = cv2.resize(small_frame, (720, 480), interpolation=cv2.INTER_LINEAR)

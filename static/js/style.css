@@ -273,3 +273,13 @@ tr:nth-child(even) {
     height: 100%;
     object-fit: contain;
 }
+
+.direction-arrow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 48px;
+    color: #4CAF50;
+    z-index: 10;
+}
