@@ -33,7 +33,7 @@ class StyleSheet:
             /* Base Styles */
             QWidget {{
                 font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 18px;
+                font-size: 16px;
                 color: {colors['text-primary']};
                 background-color: {colors['bg-main']};
             }}
@@ -55,7 +55,7 @@ class StyleSheet:
                 font-weight: 600;
                 min-width: 140px;
                 min-height: 48px;
-                font-size: 18px;
+                font-size: 16px;
             }}
             
             QPushButton:disabled {{
@@ -118,7 +118,7 @@ class StyleSheet:
                 padding: 12px 16px;
                 background: {colors['bg-card']};
                 min-height: 24px;
-                font-size: 18px;
+                font-size: 16px;
             }}
             
             QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus {{
@@ -140,7 +140,7 @@ class StyleSheet:
             
             /* Labels */
             QLabel {{
-                font-size: 18px;
+                font-size: 16px;
                 color: {colors['text-primary']};
             }}
             
@@ -161,13 +161,13 @@ class StyleSheet:
                 border: 1px solid {colors['border']};
                 border-radius: 8px;
                 padding: 12px;
-                font-size: 18px;
+                font-size: 16px;
             }}
             
             QLabel#statusLabel {{
                 color: {colors['text-secondary']};
                 padding: 8px;
-                font-size: 18px;
+                font-size: 16px;
             }}
             
             QLabel#videoFeed {{
@@ -181,7 +181,7 @@ class StyleSheet:
                 border: 1px solid {colors['border']};
                 border-radius: 6px;
                 padding: 4px;
-                font-size: 18px;
+                font-size: 16px;
                 background: {colors['bg-card']};
             }}
             
@@ -199,14 +199,14 @@ class StyleSheet:
             QHeaderView::section {{
                 background-color: {colors['bg-main']};
                 padding: 8px;
-                font-size: 18px;
+                font-size: 16px;
                 font-weight: bold;
                 border: 1px solid {colors['border']};
             }}
             
             /* RadioButton Styles */
             QRadioButton {{
-                font-size: 18px;
+                font-size: 16px;
                 spacing: 8px;
             }}
             
@@ -249,7 +249,7 @@ class StyleSheet:
                 font-size: 16px;
             }}
             QLabel#valueLabel {{
-                font-size: 18px;
+                font-size: 16px;
                 color: #1f2937;
                 font-weight: bold;
                 background: #f3f4f6;
@@ -265,7 +265,7 @@ class StyleSheet:
             }}
 
             QLabel#fieldLabel {{
-                font-size: 18px;
+                font-size: 16px;
                 color: #374151;
                 font-weight: 500;
             }}
@@ -303,8 +303,8 @@ class StyleSheet:
             }}
             
             QPushButton#addButton, QPushButton#removeButton {{
-                background-color: white;
-                border: 1px solid #e5e7eb;
+                background-color: {colors['text-secondary']};
+                border: 1px solid {colors['border']};
                 border-radius: 4px;
                 font-size: 16px;
                 padding: 0;
@@ -313,23 +313,29 @@ class StyleSheet:
                 height: 32px;
                 line-height: 32px;
                 text-align: center;
+                min-width: 32px;  /* Override default min-width */
+                min-height: 32px; /* Override default min-height */
             }}
-                QPushButton#addButton {{
-                color: #059669;
+            
+            QPushButton#addButton {{
+                color: white;
             }}
             
             QPushButton#addButton:hover {{
-                background-color: #f0fdf4;
+                background-color: {colors['text-light']};
             }}
             
             QPushButton#removeButton {{
-                color: #dc2626;
+                color: white;
             }}
             
             QPushButton#removeButton:hover {{
-                background-color: #fef2f2;
+                background-color: {colors['text-light']};
             }}
-
+            
+            QPushButton#addButton:pressed, QPushButton#removeButton:pressed {{
+                background-color: {colors['text-primary']};
+            }}
         """
 
     @staticmethod
@@ -361,7 +367,7 @@ class StyleSheet:
             color: white;
             border: none;
             border-radius: 6px;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 500;
             padding: 8px 16px;
         }
@@ -378,11 +384,11 @@ class StyleSheet:
             padding: 8px;
             border: 1px solid #e5e7eb;
             border-radius: 4px;
-            font-size: 18px;
+            font-size: 16px;
         }
         
         QLabel {
-            font-size: 18px;
+            font-size: 16px;
         }
         """
 
@@ -398,7 +404,7 @@ class StyleSheet:
             }}
             
             QDialog QLabel {{
-                font-size: 18px;
+                font-size: 16px;
                 color: {colors['text-secondary']};
                 font-weight: 500;
             }}
@@ -408,7 +414,7 @@ class StyleSheet:
                 border-radius: 6px;
                 padding: 12px;
                 background: {colors['bg-card']};
-                font-size: 18px;
+                font-size: 16px;
             }}
             
             QDialog QComboBox {{
@@ -416,9 +422,10 @@ class StyleSheet:
                 border-radius: 6px;
                 padding: 12px;
                 background: {colors['bg-card']};
-                font-size: 18px;
+                font-size: 16px;
             }}
             
+            /* Updated button styles */
             QDialog QPushButton {{
                 background-color: {colors['primary']};
                 color: white;
@@ -427,39 +434,92 @@ class StyleSheet:
                 border-radius: 8px;
                 min-width: 120px;
                 font-weight: 600;
-                font-size: 18px;
+                font-size: 16px;
             }}
             
+            /* Style for the default (OK) button */
             QDialog QPushButton:default {{
                 background-color: {colors['success']};
             }}
             
+            /* Style for the Cancel button */
             QDialog QPushButton[text="Cancel"] {{
+                background-color: {colors['text-secondary']};
+            }}
+            
+            /* Style for dialog buttons at the bottom */
+            QDialogButtonBox QPushButton {{
+                background-color: {colors['primary']};
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                min-width: 100px;
+                font-weight: 500;
+                font-size: 16px;
+                margin: 0 5px;
+            }}
+            
+            QDialogButtonBox QPushButton:hover {{
+                background-color: {colors['border-focus']};
+            }}
+            
+            /* Specific style for Cancel button in button box */
+            QDialogButtonBox QPushButton[text="Cancel"] {{
+                background-color: {colors['text-secondary']};
+            }}
+            
+            QDialogButtonBox QPushButton[text="Cancel"]:hover {{
                 background-color: {colors['text-light']};
             }}
         """
     
     @staticmethod
     def get_message_box_style():
+        """Get styles for QMessageBox"""
         return """
-        QMessageBox {
-            background-color: #1F2937;
-        }
-        QLabel {
-            color: white;
-            min-width: 300px;
-            min-height: 40px;
-        }
-        QPushButton {
-            min-width: 100px;
-            min-height: 30px;
-            background-color: #374151;
-            color: white;
-            border: 1px solid #4B5563;
-            border-radius: 4px;
-            padding: 5px;
-        }
-        QPushButton:hover {
-            background-color: #4B5563;
-        }
+            QMessageBox {
+                background-color: #ffffff;
+            }
+            QMessageBox QLabel {
+                color: #1f2937;
+                font-size: 14px;
+                padding: 10px;
+            }
+            QMessageBox QPushButton {
+                min-width: 100px;
+                min-height: 30px;
+                padding: 5px 15px;
+                background-color: #3b82f6;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: 500;
+                margin: 5px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #2563eb;
+            }
+            /* Style for standard Yes button */
+            QMessageBox QPushButton[text="&Yes"] {
+                background-color: #059669;
+            }
+            QMessageBox QPushButton[text="&Yes"]:hover {
+                background-color: #047857;
+            }
+            /* Style for standard No button */
+            QMessageBox QPushButton[text="&No"] {
+                background-color: #6b7280;
+            }
+            QMessageBox QPushButton[text="&No"]:hover {
+                background-color: #4b5563;
+            }
+            /* Style for standard OK button */
+            QMessageBox QPushButton[text="OK"] {
+                background-color: #3b82f6;
+            }
+            QMessageBox QPushButton[text="OK"]:hover {
+                background-color: #2563eb;
+            }
         """

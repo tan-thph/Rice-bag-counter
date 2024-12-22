@@ -3,7 +3,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                            QLabel, QLineEdit, QComboBox, QTextEdit, QMessageBox)
 import cv2
-
+from qt_styles import StyleSheet
 # Camera brand RTSP templates
 CAMERA_BRANDS = {
     "Hikvision": {
@@ -39,6 +39,7 @@ CAMERA_BRANDS = {
 class CameraManager:
     def __init__(self):
         self.custom_cameras = self.load_custom_cameras()
+        print("Loaded custom cameras:", self.custom_cameras)  # Debug print
     
     def load_custom_cameras(self):
         """Load custom cameras from settings file"""
@@ -46,7 +47,10 @@ class CameraManager:
             settings_path = Path.home() / '.ricebagcounter' / 'camera_settings.json'
             if settings_path.exists():
                 with open(settings_path, 'r') as f:
-                    return json.load(f)
+                    cameras = json.load(f)
+                    print(f"Loaded cameras from {settings_path}: {cameras}")  # Debug print
+                    return cameras
+            print(f"No camera settings file found at {settings_path}")  # Debug print
             return {}
         except Exception as e:
             print(f"Error loading custom cameras: {e}")
@@ -59,8 +63,10 @@ class CameraManager:
             settings_path.parent.mkdir(parents=True, exist_ok=True)
             with open(settings_path, 'w') as f:
                 json.dump(self.custom_cameras, f)
+                print(f"Saved cameras to {settings_path}: {self.custom_cameras}")  # Debug print
         except Exception as e:
             print(f"Error saving custom cameras: {e}")
+            raise
 
     def add_camera(self, name, url):
         """Add a new camera"""
@@ -79,12 +85,13 @@ class CameraManager:
 
     def get_camera_url(self, name):
         """Get camera URL by name"""
-        return self.custom_cameras.get(name)
+        url = self.custom_cameras.get(name)
+        return url
 
     def get_all_cameras(self):
         """Get all custom cameras"""
         return self.custom_cameras
-
+    
 class AddCameraDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -180,20 +187,73 @@ class AddCameraDialog(QDialog):
         self.description_label.setWordWrap(True)
         layout.addWidget(self.description_label)
 
-        # Buttons
+        # Create button layout
         button_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save")
+        
+        # Test button (separate from dialog buttons)
         self.test_btn = QPushButton("Test Connection")
+        self.test_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3b82f6;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                min-width: 100px;
+                font-weight: 500;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #2563eb;
+            }
+        """)
+        self.test_btn.clicked.connect(self.test_connection)
+        button_layout.addWidget(self.test_btn)
+        
+        # Add spacer
+        button_layout.addStretch()
+        
+        # Create Save and Cancel buttons
+        self.save_btn = QPushButton("Save")
+        self.save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #059669;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                min-width: 100px;
+                font-weight: 500;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #047857;
+            }
+        """)
+        
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6b7280;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                min-width: 100px;
+                font-weight: 500;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #4b5563;
+            }
+        """)
         
         self.save_btn.clicked.connect(self.save_camera)
-        self.test_btn.clicked.connect(self.test_connection)
         cancel_btn.clicked.connect(self.reject)
         
-        button_layout.addWidget(self.test_btn)
-        button_layout.addStretch()
         button_layout.addWidget(cancel_btn)
         button_layout.addWidget(self.save_btn)
+        
         layout.addLayout(button_layout)
 
         # Set initial values and connect signals
@@ -244,7 +304,9 @@ class AddCameraDialog(QDialog):
         """Test the RTSP connection"""
         rtsp_url = self.preview_text.toPlainText()
         if not rtsp_url:
-            QMessageBox.warning(self, "Test Connection", "Please fill in all required fields")
+            self.show_message("Test Connection", 
+                            "Please fill in all required fields", 
+                            QMessageBox.Warning)
             return
 
         try:
@@ -254,18 +316,22 @@ class AddCameraDialog(QDialog):
                 cap.release()
                 
                 if ret:
-                    QMessageBox.information(self, "Test Success", 
-                                          "Successfully connected to camera!")
+                    self.show_message("Test Success", 
+                                    "Successfully connected to camera!")
                 else:
-                    QMessageBox.warning(self, "Test Failed", 
-                                      "Connected but failed to get video stream")
+                    self.show_message("Test Failed", 
+                                    "Connected but failed to get video stream",
+                                    QMessageBox.Warning)
             else:
-                QMessageBox.warning(self, "Test Failed", 
-                                  "Failed to connect to camera")
+                self.show_message("Test Failed", 
+                                "Failed to connect to camera",
+                                QMessageBox.Warning)
                 
         except Exception as e:
-            QMessageBox.critical(self, "Test Error", 
-                               f"Error testing connection: {str(e)}")
+            self.show_message("Test Error", 
+                            f"Error testing connection: {str(e)}",
+                            QMessageBox.Critical)
+
 
     def save_camera(self):
         """Save the camera configuration"""
@@ -273,8 +339,19 @@ class AddCameraDialog(QDialog):
         url = self.preview_text.toPlainText()
         
         if not name or not url:
-            QMessageBox.warning(self, "Input Error", "Please fill in all required fields")
+            self.show_message("Input Error", 
+                            "Please fill in all required fields",
+                            QMessageBox.Warning)
             return
             
         self.accept()
         return name, url
+        
+    def show_message(self, title, message, icon=QMessageBox.Information):
+        """Show a styled message box"""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(icon)
+        msg_box.setStyleSheet(StyleSheet.get_message_box_style())
+        return msg_box.exec_()

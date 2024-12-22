@@ -133,10 +133,10 @@ class DetectionThread(QThread):
             crossed = (prev_point[1] - line_pos) * (current_point[1] - line_pos) <= 0
             if crossed:
                 if self.count_direction == "left_to_right":
-                    return 1 if prev_point[1] < line_pos else -1
+                    # For horizontal line, we need to check X coordinates for direction
+                    return 1 if current_point[0] > prev_point[0] else -1
                 else:
-                    return 1 if prev_point[1] > line_pos else -1
-        return 0
+                    return 1 if current_point[0] < prev_point[0] else -1
 
     def process_frame(self, frame, model, line_pos):
         """Process a single frame for bag detection and tracking"""
@@ -161,7 +161,7 @@ class DetectionThread(QThread):
                 if self.is_vertical:
                     center = (x_max, y_min)
                 else:
-                    center = (x_max, y_max)
+                    center = (x_min, y_max)
                 
                 # Track bag
                 bag_id = self.track_bag(center, self.tracked_bags)

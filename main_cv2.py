@@ -101,13 +101,15 @@ class AppWindow(QWidget):
         self.camera_combo.clear()
         self.camera_combo.addItem("Default")
         
-        # Add default cameras
+        # Load custom cameras first
+        custom_cameras = self.camera_manager.get_all_cameras()
+        for name in custom_cameras:
+            self.camera_combo.addItem(name)
+        
+        # Then load default cameras
         for name in DEFAULT_CAMERAS:
-            self.camera_combo.addItem(name)
-            
-        # Add custom cameras
-        for name in self.camera_manager.get_all_cameras():
-            self.camera_combo.addItem(name)
+            if name not in custom_cameras:
+                self.camera_combo.addItem(name)
 
     def show_add_camera_dialog(self):
         """Show dialog to add new camera"""
@@ -117,48 +119,94 @@ class AppWindow(QWidget):
             try:
                 self.camera_manager.add_camera(name, url)
                 self.load_cameras()
-                QMessageBox.information(self, "Success", 
-                                      f"Camera '{name}' added successfully!")
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Success")
+                msg_box.setText(f"Camera '{name}' added successfully!")
+                msg_box.setIcon(QMessageBox.Information)
+                msg_box.setStyleSheet(StyleSheet.get_message_box_style())
+                msg_box.exec_()
             except Exception as e:
-                QMessageBox.critical(self, "Error", 
-                                   f"Failed to add camera: {str(e)}")
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Error")
+                msg_box.setText(f"Failed to add camera: {str(e)}")
+                msg_box.setIcon(QMessageBox.Critical)
+                msg_box.setStyleSheet(StyleSheet.get_message_box_style())
+                msg_box.exec_()
 
     def remove_selected_camera(self):
         """Remove selected camera if it's a custom camera"""
         current_camera = self.camera_combo.currentText()
         
         if current_camera in DEFAULT_CAMERAS:
-            QMessageBox.warning(self, "Remove Error", 
-                              "Cannot remove default cameras")
+            msg = QMessageBox()
+            msg.setWindowTitle("Remove Error")
+            msg.setText("Cannot remove default cameras")
+            msg.setIcon(QMessageBox.Warning)
+            msg.setStandardButtons(QMessageBox.Ok)  # Use StandardButtons
+            msg.setStyleSheet(StyleSheet.get_message_box_style())
+            msg.exec_()
             return
-            
+                
         if current_camera in self.camera_manager.get_all_cameras():
-            reply = QMessageBox.question(
-                self,
-                "Confirm Removal",
-                f"Are you sure you want to remove camera '{current_camera}'?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
+            # Create confirmation dialog using StandardButtons
+            confirm = QMessageBox()
+            confirm.setWindowTitle("Confirm Removal")
+            confirm.setText(f"Xóa camera '{current_camera}'?")
+            confirm.setIcon(QMessageBox.Question)
+            confirm.setStandardButtons(QMessageBox.Yes | QMessageBox.No)  # Use StandardButtons
+            confirm.setDefaultButton(QMessageBox.No)
+            confirm.setStyleSheet(StyleSheet.get_message_box_style())
             
-            if reply == QMessageBox.Yes:
+            # Show dialog and get result
+            result = confirm.exec_()
+            
+            if result == QMessageBox.Yes:  # Check the result directly
                 if self.camera_manager.remove_camera(current_camera):
                     self.load_cameras()
-                    QMessageBox.information(self, "Success", 
-                                          f"Camera '{current_camera}' removed successfully!")
+                    success = QMessageBox()
+                    success.setWindowTitle("Thành công")
+                    success.setText(f"Camera '{current_camera}' đã xóa!")
+                    success.setIcon(QMessageBox.Information)
+                    success.setStandardButtons(QMessageBox.Ok)
+                    success.setStyleSheet(StyleSheet.get_message_box_style())
+                    success.exec_()
                 else:
-                    QMessageBox.warning(self, "Error", 
-                                      f"Failed to remove camera '{current_camera}'")
-
+                    error = QMessageBox()
+                    error.setWindowTitle("Lỗi")
+                    error.setText(f"Không thể xóa camera '{current_camera}'")
+                    error.setIcon(QMessageBox.Warning)
+                    error.setStandardButtons(QMessageBox.Ok)
+                    error.setStyleSheet(StyleSheet.get_message_box_style())
+                    error.exec_()
+                    
     def start_camera(self):
         """Start detection using selected camera"""
-        selected_camera = self.camera_combo.currentText()
-        if selected_camera == "Default":
-            source = 0
-        else:
-            source = (self.camera_manager.get_camera_url(selected_camera) or 
-                     DEFAULT_CAMERAS.get(selected_camera, 0))
-        self.start_detection(source, "Camera")
+        try:
+            selected_camera = self.camera_combo.currentText()         
+            source = None
+            
+            # First check if it's the default camera
+            if selected_camera == "Default":
+                source = 0
+                print("Nguồn test: 0")
+            else:
+                # Check custom cameras first
+                source = self.camera_manager.get_camera_url(selected_camera)
+                if source:
+                    print(f"Found custom camera URL: {source}")
+                else:
+                    # Then check default cameras
+                    source = DEFAULT_CAMERAS.get(selected_camera)
+                    print(f"Found default camera URL: {source}")
+                
+                if source is None:
+                    raise ValueError(f"Camera URL không tìm thấy cho {selected_camera}")
+            
+            self.start_detection(source, "Camera")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Camera Error", f"Failed to start camera: {str(e)}")
+            self.update_ui_state(running=False) 
 
     def setup_video_panel(self, layout):
         """Setup the video display and camera controls"""
@@ -314,6 +362,9 @@ class AppWindow(QWidget):
         
         self.commodity = QLineEdit()
         self.commodity.setPlaceholderText("Nhập loại hàng")
+
+        self.order_number = QLineEdit()
+        self.order_number.setPlaceholderText("Nhập số đơn hàng")
         
         self.weight_per_bag = QLineEdit()
         self.weight_per_bag.setPlaceholderText("Nhập trọng lượng mỗi bao")
@@ -327,6 +378,7 @@ class AppWindow(QWidget):
             ("Tên khách hàng:", self.customer_name),
             ("Biển số xe:", self.truck_number),
             ("Loại hàng:", self.commodity),
+            ("Số đơn hàng:", self.order_number),
             ("Trọng lượng mỗi bao (kg):", self.weight_per_bag),
             ("Tổng trọng lượng:", self.total_weight)
         ]
@@ -377,12 +429,15 @@ class AppWindow(QWidget):
         self.start_video_btn.clicked.connect(self.start_video)
         self.stop_btn.clicked.connect(self.stop_detection)
         self.weight_per_bag.textChanged.connect(self.update_total_weight)
-
-    def start_camera(self):
-        """Start detection using selected camera"""
-        selected_camera = self.camera_combo.currentText()
-        source = DEFAULT_CAMERAS.get(selected_camera, 0)  # Use 0 for default camera
-        self.start_detection(source, "Camera")
+        self.camera_combo.currentTextChanged.connect(self.on_camera_selected)
+            
+    def on_camera_selected(self, camera_name):
+        if camera_name != "Default":
+            url = self.camera_manager.get_camera_url(camera_name)
+            if url:
+                print(f"Selected camera URL: {url}")
+            else:
+                print(f"Selected camera URL from defaults: {DEFAULT_CAMERAS.get(camera_name)}")
 
     def start_video(self):
         """Start detection using video file"""
@@ -398,7 +453,6 @@ class AppWindow(QWidget):
             if self.detection_thread and self.detection_thread.isRunning():
                 self.stop_detection()
 
-            # Configure detection parameters
             self.detection_thread = DetectionThread(
                 source,
                 "Detection Feed",
@@ -524,9 +578,10 @@ class AppWindow(QWidget):
         """Save detection results"""
         if not self.customer_name.text() or not self.truck_number.text():
             return
-            
+                
         record = {
             "customer_name": self.customer_name.text(),
+            "order_number": self.order_number.text(),  # Add this line
             "truck_number": self.truck_number.text(),
             "commodity": self.commodity.text(),
             "date_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -536,9 +591,9 @@ class AppWindow(QWidget):
             "source_type": self.current_source_type,
             "timestamp": datetime.now().isoformat()
         }
-        
+            
         if self.record_manager.add_record(record):
-            self.status_label.setText("Record saved successfully")
+            self.status_label.setText("Dự liệu đã được lưu")
 
     def load_existing_records(self):
         """Load and display existing detection records"""
