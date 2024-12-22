@@ -1,155 +1,109 @@
-
-import sys, os
-from PyQt5.QtWidgets import (QWidget, QPushButton, 
-                             QVBoxLayout, QHBoxLayout, 
-                             QFileDialog, QMessageBox, QTextEdit)
-
-from PyQt5.QtWidgets import (QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, 
-                           QPushButton, QHeaderView, QDialogButtonBox,
-                           QMessageBox, QFileDialog)
-from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt5.QtCore import QSizeF, QMarginsF, Qt, QDateTime, QUrl
-from PyQt5.QtGui import QPageSize, QTextDocument, QDesktopServices
-import json
+import os, sys, json, tempfile
 from datetime import datetime
-
-# New imports for PDF generation
-from reportlab.lib.pagesizes import A5, landscape
+from pathlib import Path
+from PyQt5.QtWidgets import (
+    QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, 
+    QHBoxLayout, QPushButton, QHeaderView, QMessageBox,
+    QLabel, QLineEdit, QWidget
+)
+from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtGui import QDesktopServices
 from reportlab.lib import colors
+from reportlab.lib.pagesizes import A5, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Frame, KeepInFrame
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-import tempfile
-import os
-
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, 
+    TableStyle, Frame, KeepInFrame
+)
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-
 from qt_styles import StyleSheet
 
-# Get the directory of the current script
-current_dir = os.path.dirname(os.path.abspath(__file__))
-font_path = os.path.join(current_dir, 'fonts', 'DejaVuSans.ttf')
-app_dir = os.path.dirname(current_dir)
-font_path = os.path.join(app_dir, 'resources', 'fonts', 'DejaVuSans.ttf')
-
-# Add debug prints to verify paths
-print(f"Current directory: {current_dir}")
-print(f"App directory: {app_dir}")
-print(f"Font path: {font_path}")
-print(f"Font exists: {os.path.exists(font_path)}")
-
-# Only register font if it exists
-if not os.path.exists(font_path):
-    raise FileNotFoundError(f"Font file not found at: {font_path}")
-
-# Register DejaVu font
-pdfmetrics.registerFont(TTFont('DejaVu', font_path))
-
-class DetectionRecord:
-    def __init__(self, customer_name="", truck_number="", commodity="", 
-                 date_time="", weight_per_bag="", total_weight="", 
-                 bag_count=0, source_type="Camera"):
-        self.customer_name = customer_name
-        self.truck_number = truck_number
-        self.commodity = commodity
-        self.date_time = date_time
-        self.weight_per_bag = weight_per_bag
-        self.total_weight = total_weight
-        self.bag_count = bag_count
-        self.source_type = source_type
-
-    def to_dict(self):
-        return {
-            "customer_name": self.customer_name,
-            "truck_number": self.truck_number,
-            "commodity": self.commodity,
-            "date_time": self.date_time,
-            "weight_per_bag": self.weight_per_bag,
-            "total_weight": self.total_weight,
-            "bag_count": self.bag_count,
-            "source_type": self.source_type
-        }
+class FontManager:
+    """Manages font registration and fallback for PDF generation"""
+    FONT_PATHS = [
+        Path(__file__).parent.parent / 'resources' / 'fonts' / 'DejaVuSans.ttf',
+        Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
+        Path('C:/Windows/Fonts/arial.ttf')
+    ]
 
     @classmethod
-    def from_dict(cls, data):
-        return cls(**data)
+    def initialize(cls):
+        """Initialize fonts with fallback options"""
+        for font_path in cls.FONT_PATHS:
+            if font_path.exists():
+                try:
+                    if 'DejaVu' not in pdfmetrics.getRegisteredFontNames():
+                        pdfmetrics.registerFont(TTFont('DejaVu', str(font_path)))
+                    return True
+                except Exception as e:
+                    print(f"Error registering font {font_path}: {e}")
+        raise FileNotFoundError("No suitable fonts found")
 
 class RecordManager:
+    """Manages detection records storage and retrieval"""
+    
     def __init__(self):
         self.records = []
-        self.records_dir = self._get_records_dir()
+        self.records_dir = self._initialize_records_directory()
         self.load_records()
 
-    def _get_records_dir(self):
-        """Get or create the records directory in Downloads folder"""
-        downloads_path = os.path.expanduser("~/Downloads")
-        records_dir = os.path.join(downloads_path, "records")
-        
-        if not os.path.exists(records_dir):
-            try:
-                os.makedirs(records_dir)
-                print(f"Created records directory at: {records_dir}")
-            except Exception as e:
-                print(f"Error creating records directory: {e}")
-                return None
-        
+    def _initialize_records_directory(self):
+        """Initialize the records directory based on OS"""
+        if sys.platform == 'win32':
+            base_dir = Path(os.getenv('APPDATA')) / 'RiceBagCounter'
+        else:
+            base_dir = Path.home() / '.ricebagcounter'
+
+        records_dir = base_dir / 'records'
+        records_dir.mkdir(parents=True, exist_ok=True)
         return records_dir
 
-    def generate_filename(self):
-        """Generate a unique filename for the record"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"record_{timestamp}.json"
-
-    def add_record(self, record):
-        """Add a new record and save it to file"""
-        if not self.records_dir:
-            print("Records directory not available")
-            return False
-
+    def add_record(self, record_data):
+        """Add a new detection record"""
         try:
-            # Add timestamp if not present
-            if 'timestamp' not in record:
-                record['timestamp'] = datetime.now().isoformat()
-
-            # Save to individual file
-            filename = self.generate_filename()
-            filepath = os.path.join(self.records_dir, filename)
+            # Validate record data
+            self._validate_record(record_data)
             
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(record, f, ensure_ascii=False, indent=4)
-
+            # Add metadata
+            record = dict(record_data)
+            record['timestamp'] = datetime.now().isoformat()
+            record['id'] = str(int(datetime.now().timestamp() * 1000))
+            
+            # Save to file
+            file_path = self.records_dir / f"record_{record['id']}.json"
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+            
             self.records.append(record)
-            print(f"Record saved to: {filepath}")
             return True
-
         except Exception as e:
-            print(f"Error saving record: {e}")
+            print(f"Error adding record: {e}")
             return False
+
+    def _validate_record(self, record):
+        """Validate required fields in record"""
+        required_fields = ['customer_name', 'truck_number', 'bag_count']
+        missing_fields = [field for field in required_fields if not record.get(field)]
+        if missing_fields:
+            raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
 
     def load_records(self):
-        """Load all records from the records directory"""
-        if not self.records_dir:
-            print("Records directory not available")
-            return
-
+        """Load all records from storage"""
         try:
             self.records = []
-            for filename in os.listdir(self.records_dir):
-                if filename.endswith('.json'):
-                    filepath = os.path.join(self.records_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8') as f:
-                            record = json.load(f)
-                            self.records.append(record)
-                    except Exception as e:
-                        print(f"Error loading record {filename}: {e}")
+            for file_path in self.records_dir.glob('*.json'):
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        record = json.load(f)
+                        self.records.append(record)
+                except Exception as e:
+                    print(f"Error loading record {file_path}: {e}")
 
-            # Sort records by timestamp if available
+            # Sort by timestamp descending
             self.records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-            print(f"Loaded {len(self.records)} records")
-
         except Exception as e:
             print(f"Error loading records: {e}")
 
@@ -158,85 +112,129 @@ class RecordManager:
         return self.records
 
     def filter_records_by_date(self, start_date, end_date):
-        """Filter records between start_date and end_date"""
+        """Filter records within date range"""
         filtered = []
         for record in self.records:
             try:
-                record_date = datetime.strptime(record['date_time'], "%Y-%m-%d %H:%M:%S").date()
+                record_date = datetime.strptime(
+                    record['date_time'], 
+                    "%Y-%m-%d %H:%M:%S"
+                ).date()
                 if start_date <= record_date <= end_date:
                     filtered.append(record)
             except (KeyError, ValueError) as e:
-                print(f"Error processing record date: {e}")
+                print(f"Error filtering record: {e}")
         return filtered
-    
-    pass
 
 class PDFGenerator:
+    """Generates PDF reports from detection records"""
+    
     @staticmethod
     def generate_pdf(record):
-        # Create a temporary file for the PDF
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            buffer = temp_file.name
+        """Generate PDF report for a record"""
+        try:
+            FontManager.initialize()
+            
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                pdf_path = temp_file.name
 
-        # Create the PDF document
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=landscape(A5),
-            leftMargin=10*mm,
-            rightMargin=10*mm,
-            topMargin=10*mm,
-            bottomMargin=10*mm
-        )
+            # Setup document
+            doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=landscape(A5),
+                leftMargin=10*mm,
+                rightMargin=10*mm,
+                topMargin=10*mm,
+                bottomMargin=10*mm
+            )
 
+            # Generate content
+            elements = PDFGenerator._generate_content(record)
+            
+            # Build PDF
+            doc.build(
+                elements,
+                onFirstPage=PDFGenerator._add_footer,
+                onLaterPages=PDFGenerator._add_footer
+            )
+
+            # Open PDF
+            QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))
+            return pdf_path
+
+        except Exception as e:
+            print(f"Error generating PDF: {e}")
+            raise
+
+    @staticmethod
+    def _generate_content(record):
+        """Generate PDF content elements"""
+        styles = PDFGenerator._get_styles()
         elements = []
+
+        # Add header
+        elements.extend([
+            Paragraph("Công ty TNHH DV XNK Thành Hưng", styles['centered']),
+            Paragraph("Quảng Nghiệp - Phước Hưng - Tuy Phước - Bình Định", styles['centered']),
+            Paragraph("SĐT: 836-118", styles['centered']),
+            Spacer(1, 5*mm),
+            Paragraph(
+                f"Phiếu kết quả kiểm đếm hàng hóa - {record.get('customer_name', 'N/A')}", 
+                styles['title']
+            ),
+            Spacer(1, 5*mm)
+        ])
+
+        # Add table
+        table_data = PDFGenerator._prepare_table_data(record)
+        table = Table(table_data, colWidths=[40*mm, 60*mm, 40*mm, 60*mm])
+        table.setStyle(PDFGenerator._get_table_style())
+        elements.append(table)
+
+        return elements
+
+    @staticmethod
+    def _get_styles():
+        """Get document styles"""
         styles = getSampleStyleSheet()
+        return {
+            'centered': ParagraphStyle(
+                'Centered',
+                parent=styles['Normal'],
+                fontName='DejaVu',
+                alignment=TA_CENTER,
+                fontSize=10,
+                leading=12
+            ),
+            'left': ParagraphStyle(
+                'Left',
+                parent=styles['Normal'],
+                fontName='DejaVu',
+                alignment=TA_LEFT,
+                fontSize=10,
+                leading=12
+            ),
+            'right': ParagraphStyle(
+                'Right',
+                parent=styles['Normal'],
+                fontName='DejaVu',
+                alignment=TA_RIGHT,
+                fontSize=10,
+                leading=12
+            ),
+            'title': ParagraphStyle(
+                'Title',
+                parent=styles['Heading1'],
+                fontName='DejaVu',
+                alignment=TA_CENTER,
+                fontSize=14
+            )
+        }
 
-        # Define styles
-        centered_style = ParagraphStyle(
-            name='Centered',
-            parent=styles['Normal'],
-            fontName='DejaVu',
-            alignment=TA_CENTER,
-            fontSize=10,
-            leading=12
-        )
-        
-        left_style = ParagraphStyle(
-            name='Left',
-            parent=styles['Normal'],
-            fontName='DejaVu',
-            alignment=TA_LEFT,
-            fontSize=10,
-            leading=12
-        )
-        
-        right_style = ParagraphStyle(
-            name='Right',
-            parent=styles['Normal'],
-            fontName='DejaVu',
-            alignment=TA_RIGHT,
-            fontSize=10,
-            leading=12
-        )
-        
-        title_style = ParagraphStyle(
-            name='Title',
-            parent=styles['Heading1'],
-            fontName='DejaVu',
-            alignment=TA_CENTER,
-            fontSize=14
-        )
-
-        # Add company information
-        elements.append(Paragraph("Công ty TNHH DV XNK Thành Hưng", centered_style))
-        elements.append(Paragraph("Quảng Nghiệp - Phước Hưng - Tuy Phước - Bình Định", centered_style))
-        elements.append(Paragraph("SĐT: 836-118", centered_style))
-        elements.append(Spacer(1, 5*mm))
-
-        # Add title
-        elements.append(Paragraph(f"Phiếu kết quả kiểm đếm hàng hóa - {record.get('customer_name', 'N/A')}", title_style))
-        elements.append(Spacer(1, 5*mm))
-
+    @staticmethod
+    def _prepare_table_data(record):
+        """Prepare data for PDF table"""
         # Format date
         date_time = record.get('date_time', 'N/A')
         if date_time != 'N/A':
@@ -256,8 +254,7 @@ class PDFGenerator:
         except (ValueError, TypeError):
             total_weight = "N/A"
 
-        # Create table data
-        data = [
+        return [
             ["Ngày & Giờ", formatted_date, "Loại công việc", record.get('source_type', 'N/A')],
             ["Khách hàng", record.get('customer_name', 'N/A'), "Số xe", record.get('truck_number', 'N/A')],
             ["Số đơn hàng", "N/A", "Hàng hóa", record.get('commodity', 'N/A')],
@@ -265,9 +262,10 @@ class PDFGenerator:
             ["Tổng trọng lượng", total_weight, "", ""]
         ]
 
-        # Create and style table
-        table = Table(data, colWidths=[40*mm, 60*mm, 40*mm, 60*mm])
-        table.setStyle(TableStyle([
+    @staticmethod
+    def _get_table_style():
+        """Get table styling"""
+        return TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.grey),
             ('BACKGROUND', (2, 0), (2, -1), colors.grey),
             ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke),
@@ -280,77 +278,100 @@ class PDFGenerator:
             ('BACKGROUND', (3, 0), (3, -1), colors.white),
             ('BOX', (0, 0), (-1, -1), 1, colors.black),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(table)
+        ])
 
-        # Add footer
-        def add_footer(canvas, doc):
-            canvas.saveState()
-            footer_frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, 20*mm)
-            footer_content = [
-                Paragraph("Ngày _____ Tháng _____ Năm _____", centered_style),
-                Spacer(1, 5*mm),
-                Table(
-                    [[Paragraph("Chữ kí khách hàng", left_style),
-                      Paragraph("Người xuất phiếu", right_style)]],
-                    colWidths=[100*mm, 100*mm]
-                )
-            ]
-            footer_frame.addFromList([KeepInFrame(doc.width, 20*mm, footer_content)], canvas)
-            canvas.restoreState()
-
-        # Build PDF
-        doc.build(elements, onFirstPage=add_footer, onLaterPages=add_footer)
-        
-        # Open PDF with default viewer
-        QDesktopServices.openUrl(QUrl.fromLocalFile(buffer))
-        return buffer
-
-class RecordPrinter:
     @staticmethod
-    def print_record(record, parent_widget=None):
-        """Generate and open PDF for a record"""
-        try:
-            pdf_path = PDFGenerator.generate_pdf(record)
-            return pdf_path
-        except Exception as e:
-            print(f"Error generating PDF: {e}")
-            if parent_widget:
-                QMessageBox.critical(parent_widget, "PDF Generation Error", 
-                                   f"Failed to generate PDF: {str(e)}")
-            return None
+    def _add_footer(canvas, doc):
+        """Add footer to PDF pages"""
+        canvas.saveState()
+        styles = PDFGenerator._get_styles()
         
+        footer_frame = Frame(
+            doc.leftMargin, 
+            doc.bottomMargin, 
+            doc.width, 
+            20*mm
+        )
+        
+        footer_content = [
+            Paragraph("Ngày _____ Tháng _____ Năm _____", styles['centered']),
+            Spacer(1, 5*mm),
+            Table(
+                [[Paragraph("Chữ kí khách hàng", styles['left']),
+                  Paragraph("Người xuất phiếu", styles['right'])]],
+                colWidths=[100*mm, 100*mm]
+            )
+        ]
+        
+        footer_frame.addFromList(
+            [KeepInFrame(doc.width, 20*mm, footer_content)],
+            canvas
+        )
+        canvas.restoreState()
+
 class HistoryDialog(QDialog):
+    """Dialog for viewing detection history"""
+    
     def __init__(self, parent, records):
         super().__init__(parent)
-        self.init_ui(records)
+        self.records = records
+        self.init_ui()
+        self.setStyleSheet(StyleSheet.get_history_dialog_style())
 
-    def init_ui(self, records):
-        # Basic window setup
+    def init_ui(self):
+        """Initialize the dialog UI"""
         self.setWindowTitle("Detection History")
         self.setMinimumSize(2000, 800)
         
-        # Main layout
         layout = QVBoxLayout(self)
         layout.setSpacing(20)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # Create and setup table
+        # Add search functionality
+        self.setup_search()
+        
+        # Setup and populate table
         self.setup_table()
-        
-        # Populate table with data
-        self.populate_table(records)
-        
-        # Add table to layout
-        layout.addWidget(self.table)
+        self.populate_table(self.records)
         
         # Add close button
         self.add_close_button(layout)
 
-    def setup_table(self):
-        self.table = QTableWidget()
+    def setup_search(self):
+        """Setup search functionality"""
+        search_layout = QHBoxLayout()
         
-        # Set up columns
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Tìm kiếm...")
+        self.search_input.textChanged.connect(self.filter_records)
+        
+        search_layout.addWidget(QLabel("Tìm kiếm:"))
+        search_layout.addWidget(self.search_input)
+        search_layout.addStretch()
+        
+        self.layout().addLayout(search_layout)
+
+    def filter_records(self, text):
+        """Filter records based on search text"""
+        if not text:
+            self.populate_table(self.records)
+            return
+            
+        filtered = []
+        search_text = text.lower()
+        
+        for record in self.records:
+            if any(search_text in str(value).lower() 
+                  for value in record.values()):
+                filtered.append(record)
+                
+        self.populate_table(filtered)
+
+    def setup_table(self):
+        """Setup the table widget"""
+        self.table = QTableWidget()
+        self.table.setSortingEnabled(True)
+        
         columns = [
             ("Ngày và giờ", 250),
             ("Khách hàng", 200),
@@ -360,12 +381,11 @@ class HistoryDialog(QDialog):
             ("Số bao", 120),
             ("Tổng trọng lượng (kg)", 300),
             ("Nguồn", 120),
-            (" ", 220)
+            ("In", 220)
         ]
         
         self.table.setColumnCount(len(columns))
         
-        # Set headers and column widths
         headers = []
         for i, (header, width) in enumerate(columns):
             self.table.setColumnWidth(i, width)
@@ -378,7 +398,6 @@ class HistoryDialog(QDialog):
         for i in range(len(columns)):
             header.setSectionResizeMode(i, QHeaderView.Fixed)
         
-        # Style the table
         self.table.setStyleSheet("""
             QTableWidget {
                 gridline-color: #e5e7eb;
@@ -397,50 +416,44 @@ class HistoryDialog(QDialog):
             }
         """)
         
-        # Set row height
         self.table.verticalHeader().setDefaultSectionSize(80)
-        
-        # Additional table properties
-        self.table.setShowGrid(True)
-        self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(True)
+        self.layout().addWidget(self.table)
 
     def create_print_button(self, row):
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        
-        # Remove margins to prevent button shifting
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        
-        # Create print button
+        """Create a print button for a table row"""
         print_button = QPushButton("In")
+        print_button.setObjectName("printButton")
         print_button.setFixedSize(120, 45)
         print_button.clicked.connect(lambda: self.print_record(row))
+        
+        # Add direct styling to ensure visibility
         print_button.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
+            QPushButton#printButton {
+                background-color: #3b82f6;  /* Blue background */
                 color: white;
                 border: none;
                 border-radius: 6px;
-                font-size: 20px;
-                padding: 10px 20px;
+                font-size: 18px;
+                font-weight: 500;
+                padding: 8px 16px;
             }
-            QPushButton:hover {
+            QPushButton#printButton:hover {
+                background-color: #2563eb;
+            }
+            QPushButton#printButton:pressed {
                 background-color: #1d4ed8;
             }
         """)
         
-        # Add button to layout and center it
-        layout.addWidget(print_button, 0, Qt.AlignCenter)
-        
-        return container
+        return print_button
 
     def populate_table(self, records):
+        """Populate table with records"""
         self.table.setRowCount(len(records))
         
         for row, record in enumerate(records):
-            # Set data for each column
+            # Define columns and their alignment
             columns = [
                 ('date_time', Qt.AlignLeft),
                 ('customer_name', Qt.AlignLeft),
@@ -452,15 +465,17 @@ class HistoryDialog(QDialog):
                 ('source_type', Qt.AlignCenter)
             ]
             
+            # Set data for each column
             for col, (field, alignment) in enumerate(columns):
                 item = QTableWidgetItem(str(record.get(field, '')))
                 item.setTextAlignment(alignment | Qt.AlignVCenter)
                 self.table.setItem(row, col, item)
             
-            # Add print button
-            self.table.setCellWidget(row, 8, self.create_print_button(row))
+            # Add print button in the last column
+            self.table.setCellWidget(row, len(columns), self.create_print_button(row))
 
     def add_close_button(self, layout):
+        """Add close button to dialog"""
         close_button = QPushButton("Đóng cửa sổ")
         close_button.setFixedHeight(60)
         close_button.clicked.connect(self.close)
@@ -480,17 +495,21 @@ class HistoryDialog(QDialog):
         layout.addWidget(close_button)
 
     def print_record(self, row):
-        # Get data from the selected row
-        record_data = {}
-        for col in range(self.table.columnCount() - 1):  # Exclude the Actions column
-            header = self.table.horizontalHeaderItem(col).text()
-            item = self.table.item(row, col)
-            record_data[header] = item.text() if item else ""
+        """Handle printing of a record"""
+        try:
+            # Extract data from the selected row
+            record_data = {}
+            for col in range(self.table.columnCount() - 1):  # Exclude the print button column
+                header = self.table.horizontalHeaderItem(col).text()
+                item = self.table.item(row, col)
+                record_data[header] = item.text() if item else ""
 
-        # Create printer dialog
-        printer = QPrinter(QPrinter.HighResolution)
-        dialog = QPrintDialog(printer, self)
-        
-        if dialog.exec_() == QPrintDialog.Accepted:
-            # Print logic here - you can customize this based on your needs
-            pass
+            # Generate PDF
+            pdf_path = PDFGenerator.generate_pdf(record_data)
+            if pdf_path:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))
+            else:
+                QMessageBox.warning(self, "Print Error", "Failed to generate PDF report.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Print Error", f"Error generating PDF: {str(e)}")
