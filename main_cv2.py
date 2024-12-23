@@ -17,7 +17,6 @@ from camera_manager import CameraManager, AddCameraDialog
 DEFAULT_CAMERAS = {
     "Băng tải 1": "rtsp://admin:abcd1234@192.168.1.222:554/cam/realmonitor?channel=4&subtype=0",
     "Băng tải 2": "rtsp://admin:abcd1234@192.168.1.222:554/cam/realmonitor?channel=3&subtype=0",
-    "Test 1": "rtsp://tan001:tan001@192.168.0.62/stream1"
 }
 
 class AppWindow(QWidget):
@@ -61,7 +60,7 @@ class AppWindow(QWidget):
         header_layout.setSpacing(8)
 
         # Add "Select Camera" label
-        camera_label = QLabel("Select Camera:")
+        camera_label = QLabel("Chọn Camera:")
         camera_label.setObjectName("selectCameraLabel")
 
         # Setup camera combo box
@@ -73,7 +72,7 @@ class AppWindow(QWidget):
         # Setup add camera button
         self.add_camera_button = QPushButton("➕")
         self.add_camera_button.setObjectName("addButton")
-        self.add_camera_button.setToolTip("Add New Camera")
+        self.add_camera_button.setToolTip("Thêm Camera mới")
         self.add_camera_button.clicked.connect(self.show_add_camera_dialog)
         self.add_camera_button.setFixedSize(32, 32)  # Match combo box height
 
@@ -240,8 +239,8 @@ class AppWindow(QWidget):
         button_layout.setContentsMargins(0, 10, 0, 10)
         
         # Create buttons with consistent size
-        self.start_camera_btn = QPushButton("Start Camera")
-        self.start_video_btn = QPushButton("Load Video")
+        self.start_camera_btn = QPushButton("Camera")
+        self.start_video_btn = QPushButton("Video")
         self.stop_btn = QPushButton("Stop")
         
         # Set object names for styling

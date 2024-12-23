@@ -113,61 +113,59 @@ class StyleSheet:
             
             /* Input Field Styles */
             QLineEdit, QComboBox, QDoubleSpinBox {{
-                border: 2px solid {colors['border']};
+                border: 1px solid {colors['border']};
                 border-radius: 6px;
-                padding: 12px 16px;
+                padding: 8px 12px;  /* Reduced padding */
                 background: {colors['bg-card']};
-                min-height: 24px;
-                font-size: 16px;
-            }}
-            
-            QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus {{
-                border-color: {colors['border-focus']};
-                outline: none;
+                min-height: 20px;  /* Reduced minimum height */
+                font-size: 14px;  /* Reduced font size */
             }}
             
             /* ComboBox specific styles */
-            QComboBox::drop-down {{
-                border: none;
-                width: 30px;
+            QComboBox {{
+                min-width: 180px;  /* Added minimum width */
             }}
             
-            QComboBox::down-arrow {{
-                image: url(:/icons/dropdown.png);
-                width: 12px;
-                height: 12px;
+            QComboBox::drop-down {{
+                border: none;
+                width: 24px;  /* Reduced width */
             }}
             
             /* Labels */
             QLabel {{
-                font-size: 16px;
+                font-size: 14px;  /* Reduced font size */
                 color: {colors['text-primary']};
+                min-height: 20px;  /* Added minimum height */
             }}
             
             QLabel#sectionTitle {{
-                font-size: 26px;
+                font-size: 22px;  /* Reduced font size */
                 font-weight: bold;
-                margin-bottom: 16px;
+                margin-bottom: 12px;
             }}
             
             QLabel#fieldLabel {{
                 color: {colors['text-secondary']};
                 font-weight: 500;
-                padding: 10px 0;
+                padding: 6px 0;  /* Reduced padding */
+                min-width: 150px;  /* Added minimum width for field labels */
             }}
             
             QLabel#countLabel {{
                 background: {colors['bg-card']};
                 border: 1px solid {colors['border']};
-                border-radius: 8px;
-                padding: 12px;
-                font-size: 16px;
+                border-radius: 6px;
+                padding: 8px;  /* Reduced padding */
+                font-size: 14px;  /* Reduced font size */
+                min-height: 24px;  /* Added minimum height */
             }}
             
             QLabel#statusLabel {{
                 color: {colors['text-secondary']};
-                padding: 8px;
-                font-size: 16px;
+                padding: 6px;  /* Reduced padding */
+                font-size: 14px;  /* Reduced font size */
+                min-height: 40px;  /* Increased minimum height for multi-line text */
+                line-height: 1.4;  /* Added line height for better readability */
             }}
             
             QLabel#videoFeed {{

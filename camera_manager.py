@@ -71,7 +71,7 @@ class CameraManager:
     def add_camera(self, name, url):
         """Add a new camera"""
         if name in self.custom_cameras:
-            raise ValueError("Camera name already exists")
+            raise ValueError("Tên Camera đã tồn tại")
         self.custom_cameras[name] = url
         self.save_custom_cameras()
 
@@ -96,7 +96,7 @@ class AddCameraDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setWindowTitle("Add New Camera")
+        self.setWindowTitle("Thêm Camera mới")
         self.setModal(True)
         self.setMinimumWidth(500)
         self.init_ui()
@@ -107,7 +107,7 @@ class AddCameraDialog(QDialog):
 
         # Camera name input
         name_layout = QHBoxLayout()
-        name_label = QLabel("Camera Name:")
+        name_label = QLabel("Tên Camera:")
         name_label.setFixedWidth(120)
         self.name_input = QLineEdit()
         name_layout.addWidget(name_label)
@@ -116,7 +116,7 @@ class AddCameraDialog(QDialog):
 
         # Brand selection
         brand_layout = QHBoxLayout()
-        brand_label = QLabel("Camera Brand:")
+        brand_label = QLabel("Nhãn hiệu:")
         brand_label.setFixedWidth(120)
         self.brand_combo = QComboBox()
         self.brand_combo.addItems(CAMERA_BRANDS.keys())
@@ -173,7 +173,7 @@ class AddCameraDialog(QDialog):
 
         # RTSP URL Preview
         preview_layout = QVBoxLayout()
-        preview_label = QLabel("Generated RTSP URL:")
+        preview_label = QLabel("Tạo RTSP URL:")
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
         self.preview_text.setMaximumHeight(60)
@@ -191,7 +191,7 @@ class AddCameraDialog(QDialog):
         button_layout = QHBoxLayout()
         
         # Test button (separate from dialog buttons)
-        self.test_btn = QPushButton("Test Connection")
+        self.test_btn = QPushButton("Thử kết nối")
         self.test_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3b82f6;
@@ -214,7 +214,7 @@ class AddCameraDialog(QDialog):
         button_layout.addStretch()
         
         # Create Save and Cancel buttons
-        self.save_btn = QPushButton("Save")
+        self.save_btn = QPushButton("Lưu")
         self.save_btn.setStyleSheet("""
             QPushButton {
                 background-color: #059669;
@@ -231,7 +231,7 @@ class AddCameraDialog(QDialog):
             }
         """)
         
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton("Hủy")
         cancel_btn.setStyleSheet("""
             QPushButton {
                 background-color: #6b7280;
@@ -304,8 +304,8 @@ class AddCameraDialog(QDialog):
         """Test the RTSP connection"""
         rtsp_url = self.preview_text.toPlainText()
         if not rtsp_url:
-            self.show_message("Test Connection", 
-                            "Please fill in all required fields", 
+            self.show_message("Test kết nối", 
+                            "Vui lòng điền tất cả thông tin yêu cầu", 
                             QMessageBox.Warning)
             return
 
@@ -316,19 +316,19 @@ class AddCameraDialog(QDialog):
                 cap.release()
                 
                 if ret:
-                    self.show_message("Test Success", 
-                                    "Successfully connected to camera!")
+                    self.show_message("Test thành công", 
+                                    "Kết nối với camera thành công!")
                 else:
-                    self.show_message("Test Failed", 
-                                    "Connected but failed to get video stream",
+                    self.show_message("Test thất bại", 
+                                    "Không nhận luồng từ camera",
                                     QMessageBox.Warning)
             else:
-                self.show_message("Test Failed", 
-                                "Failed to connect to camera",
+                self.show_message("Test thất bại", 
+                                "Không thể kết nối với camera",
                                 QMessageBox.Warning)
                 
         except Exception as e:
-            self.show_message("Test Error", 
+            self.show_message("Lỗi", 
                             f"Error testing connection: {str(e)}",
                             QMessageBox.Critical)
 
@@ -340,7 +340,7 @@ class AddCameraDialog(QDialog):
         
         if not name or not url:
             self.show_message("Input Error", 
-                            "Please fill in all required fields",
+                            "Vui lòng điền tất cả thông tin yêu cầu",
                             QMessageBox.Warning)
             return
             
