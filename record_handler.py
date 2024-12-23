@@ -126,6 +126,31 @@ class RecordManager:
                 print(f"Error filtering record: {e}")
         return filtered
 
+def format_weight(value, decimal_places=2):
+    """Format weight with thousand separators and proper decimals"""
+    try:
+        # Convert to float and handle potential errors
+        num = float(value)
+        
+        # Split into integer and decimal parts
+        integer_part = int(num)
+        decimal_part = round(num - integer_part, decimal_places)
+        
+        # Format integer part with thousand separators
+        formatted_integer = "{:,}".format(integer_part).replace(",", ".")
+        
+        # Add decimal part if it exists
+        if decimal_part > 0:
+            # Convert decimal to string and remove leading '0'
+            decimal_str = f"{decimal_part:.{decimal_places}f}".lstrip("0")
+            return f"{formatted_integer}{decimal_str}"
+        
+        return f"{formatted_integer},00"
+        
+    except (ValueError, TypeError):
+        return "0,00"
+
+
 class PDFGenerator:
     """Generates PDF reports from detection records"""
     
@@ -181,7 +206,7 @@ class PDFGenerator:
             Paragraph("SĐT: 0256 3 836 118", styles['centered']),
             Spacer(1, 5*mm),
             Paragraph(
-                f"Phiếu kết quả kiểm đếm hàng hóa - Khách hàng: {record.get('customer_name', ' ')}", 
+                f"Phiếu kết quả kiểm đếm hàng hóa", 
                 styles['title']
             ),
             Spacer(1, 5*mm)
@@ -235,58 +260,59 @@ class PDFGenerator:
 
     @staticmethod
     def _prepare_table_data(record):
-        """Prepare data for PDF table"""
+        """Prepare data for PDF table with formatted numbers"""
         try:
             # Format date
             date_time = record.get('date_time', 'N/A')
             if date_time != 'N/A':
                 try:
-                    # Try different date formats
-                    try:
-                        date_obj = datetime.strptime(date_time, '%Y-%m-%d %H:%M:%S')
-                    except ValueError:
-                        # Try alternate format if first one fails
-                        date_obj = datetime.strptime(date_time, '%d-%m-%Y %H:%M')
-                    formatted_date = date_obj.strftime('%d-%m-%Y %H:%M')
+                    date_obj = datetime.strptime(date_time, '%Y-%m-%d %H:%M:%S')
                 except ValueError:
-                    formatted_date = date_time
+                    date_obj = datetime.strptime(date_time, '%d-%m-%Y %H:%M')
+                formatted_date = date_obj.strftime('%d-%m-%Y %H:%M')
             else:
                 formatted_date = 'N/A'
 
-            # Calculate total weight
+            # Handle numeric values
             try:
-                # Clean and convert weight per bag
-                weight_per_bag_str = str(record.get('weight_per_bag', '0'))
-                weight_per_bag_str = weight_per_bag_str.replace(',', '.').strip()
-                weight_per_bag = float(weight_per_bag_str)
-
-                # Clean and convert bag count
-                bag_count_str = str(record.get('bag_count', '0'))
-                bag_count = int(bag_count_str)
-
-                total_weight = f"{weight_per_bag * bag_count:.2f} Kg"
+                weight_per_bag = float(record.get('weight_per_bag', 0))
+                bag_count = int(record.get('bag_count', 0))
+                total_weight = weight_per_bag * bag_count
             except (ValueError, TypeError):
-                # If calculation fails, try to use provided total weight
-                total_weight = record.get('total_weight', 'N/A')
-                if total_weight != 'N/A':
-                    total_weight = f"{total_weight} Kg"
+                weight_per_bag = 0
+                bag_count = 0
+                total_weight = 0
 
-            # Prepare table data with cleaned values
+            # Format weights with thousand separators
+            formatted_weight_per_bag = format_weight(weight_per_bag)
+            formatted_total_weight = format_weight(total_weight)
+
+            # Get commodity with fallback
+            commodity = record.get('commodity', 'N/A')
+            if not commodity or commodity == 'None':
+                commodity = 'N/A'
+
+            # Get order number with fallback
+            order_number = record.get('order_number', 'N/A')
+            if not order_number or order_number == 'None':
+                order_number = 'N/A'
+
+            # Prepare table data with formatted numbers
             return [
                 ["Ngày & Giờ", formatted_date, "Loại công việc", record.get('source_type', 'N/A')],
                 ["Khách hàng", record.get('customer_name', 'N/A'), "Số xe", record.get('truck_number', 'N/A')],
-                ["Số đơn hàng", "N/A", "Hàng hóa", record.get('commodity', 'N/A')],
-                ["Trọng lượng mỗi bao", f"{weight_per_bag:.2f} Kg", "Số bao đã đếm", str(bag_count)],
-                ["Tổng trọng lượng", total_weight, "", ""]
+                ["Số đơn hàng", order_number, "Hàng hóa", commodity],
+                ["Trọng lượng mỗi bao", f"{formatted_weight_per_bag} Kg", "Số bao đã đếm", str(bag_count)],
+                ["Tổng trọng lượng", f"{formatted_total_weight} Kg", "", ""]
             ]
+
         except Exception as e:
             print(f"Error preparing table data: {e}")
-            # Return safe default values if processing fails
             return [
                 ["Ngày & Giờ", "N/A", "Loại công việc", "N/A"],
                 ["Khách hàng", "N/A", "Số xe", "N/A"],
                 ["Số đơn hàng", "N/A", "Hàng hóa", "N/A"],
-                ["Trọng lượng mỗi bao", "N/A", "Số  bao đã đếm", "N/A"],
+                ["Trọng lượng mỗi bao", "N/A", "Số bao đã đếm", "N/A"],
                 ["Tổng trọng lượng", "N/A", "", ""]
             ]
 
@@ -478,32 +504,47 @@ class HistoryDialog(QDialog):
         return print_button
 
     def populate_table(self, records):
-        """Populate table with records"""
+        """Populate table with records using formatted numbers"""
         self.table.setRowCount(len(records))
         
         for row, record in enumerate(records):
-            # Define columns and their alignment
-            columns = [
-                ('date_time', Qt.AlignLeft),
-                ('customer_name', Qt.AlignLeft),
-                ('truck_number', Qt.AlignLeft),
-                ('commodity', Qt.AlignLeft),
-                ('order_number', Qt.AlignLeft),
-                ('weight_per_bag', Qt.AlignRight),
-                ('bag_count', Qt.AlignRight),
-                ('total_weight', Qt.AlignRight),
-                ('source_type', Qt.AlignCenter)
-            ]
+            try:
+                # Format weights for display
+                weight_per_bag = float(record.get('weight_per_bag', 0))
+                formatted_weight = format_weight(weight_per_bag)
+                
+                total_weight = record.get('total_weight', 0)
+                if isinstance(total_weight, str):
+                    total_weight = float(total_weight.replace('Kg', '').replace('kg', '').strip())
+                formatted_total = format_weight(total_weight)
+                
+                # Define columns and their alignment
+                columns = [
+                    ('date_time', Qt.AlignLeft, lambda x: x),
+                    ('customer_name', Qt.AlignLeft, lambda x: x),
+                    ('truck_number', Qt.AlignLeft, lambda x: x),
+                    ('commodity', Qt.AlignLeft, lambda x: x),
+                    ('order_number', Qt.AlignLeft, lambda x: x),
+                    ('weight_per_bag', Qt.AlignRight, lambda x: f"{formatted_weight} Kg"),
+                    ('bag_count', Qt.AlignRight, lambda x: str(x)),
+                    ('total_weight', Qt.AlignRight, lambda x: f"{formatted_total} Kg"),
+                    ('source_type', Qt.AlignCenter, lambda x: x)
+                ]
+                
+                # Set data for each column
+                for col, (field, alignment, formatter) in enumerate(columns):
+                    value = record.get(field, '')
+                    item = QTableWidgetItem(formatter(value))
+                    item.setTextAlignment(alignment | Qt.AlignVCenter)
+                    self.table.setItem(row, col, item)
+                
+                # Add print button in the last column
+                self.table.setCellWidget(row, len(columns), self.create_print_button(row))
+                
+            except Exception as e:
+                print(f"Error populating row {row}: {e}")
+                continue
             
-            # Set data for each column
-            for col, (field, alignment) in enumerate(columns):
-                item = QTableWidgetItem(str(record.get(field, '')))
-                item.setTextAlignment(alignment | Qt.AlignVCenter)
-                self.table.setItem(row, col, item)
-            
-            # Add print button in the last column
-            self.table.setCellWidget(row, len(columns), self.create_print_button(row))
-
     def add_close_button(self, layout):
         """Add close button to dialog"""
         close_button = QPushButton("Đóng cửa sổ")
@@ -527,43 +568,82 @@ class HistoryDialog(QDialog):
     def print_record(self, row):
         """Handle printing of a record"""
         try:
-            # Create a dictionary with the correct field mappings
+            # Map table headers to record fields, accounting for newlines in headers
             header_mappings = {
                 "Ngày và giờ": "date_time",
                 "Khách hàng": "customer_name",
                 "Biển số xe": "truck_number",
-                "Loại hàng": "commodity",
-                "Số đơn hàng": "order_number",
-                "Trọng lượng mỗi bao (kg)": "weight_per_bag",
-                "Số bao": "bag_count",
-                "Tổng trọng lượng (kg)": "total_weight",
+                "Loại\nhàng": "commodity",  # Handle newline in header
+                "Số\nđơn hàng": "order_number",  # Handle newline in header
+                "Trọng lượng\nmỗi bao (kg)": "weight_per_bag",  # Handle newline in header
+                "Số\nbao": "bag_count",  # Handle newline in header
+                "Tổng\ntrọng lượng": "total_weight",  # Handle newline in header
                 "Nguồn": "source_type"
             }
 
-            # Extract data from table into a properly formatted record
+            # Extract data from table
             record_data = {}
-            for col in range(self.table.columnCount() - 1):  # Exclude the print button column
+            
+            # Helper function to clean numeric values
+            def clean_numeric(value):
+                return value.replace('Kg', '').replace('kg', '').replace(',', '.').strip()
+
+            for col in range(self.table.columnCount() - 1):  # Exclude print button column
                 header = self.table.horizontalHeaderItem(col).text()
                 item = self.table.item(row, col)
-                if item:
-                    # Map the table header to the correct field name
-                    if header in header_mappings:
-                        field_name = header_mappings[header]
-                        # Clean up the data
-                        value = item.text().strip()
-                        if header == "Trọng lượng\nmỗi bao (kg)":
-                            # Remove "kg" if present and convert to proper format
-                            value = value.replace("Kg", "").replace("kg", "").strip()
-                        elif header == "Tổng\ntrọng lượng":
-                            # Extract just the number from the total weight
-                            value = value.split()[0] if value else "0"
+                
+                if item and header in header_mappings:
+                    field_name = header_mappings[header]
+                    value = item.text().strip()
+                    
+                    # Handle specific fields
+                    if field_name == 'weight_per_bag':
+                        try:
+                            # Clean and convert to float
+                            clean_value = clean_numeric(value)
+                            record_data[field_name] = float(clean_value)
+                        except ValueError:
+                            record_data[field_name] = 0.0
+                            
+                    elif field_name == 'bag_count':
+                        try:
+                            # Convert to integer
+                            record_data[field_name] = int(value)
+                        except ValueError:
+                            record_data[field_name] = 0
+                            
+                    elif field_name == 'total_weight':
+                        try:
+                            # Extract numeric value and convert
+                            clean_value = clean_numeric(value)
+                            record_data[field_name] = float(clean_value)
+                        except ValueError:
+                            record_data[field_name] = 0.0
+                            
+                    else:
+                        # Store other fields as is
                         record_data[field_name] = value
 
-            # Generate PDF with proper data structure
+            # Verify required data is present
+            required_fields = ['customer_name', 'truck_number', 'bag_count', 'weight_per_bag']
+            missing_fields = [field for field in required_fields if not record_data.get(field)]
+            
+            if missing_fields:
+                raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+            # Calculate total weight if not present
+            if 'total_weight' not in record_data or not record_data['total_weight']:
+                try:
+                    weight_per_bag = float(record_data.get('weight_per_bag', 0))
+                    bag_count = int(record_data.get('bag_count', 0))
+                    record_data['total_weight'] = weight_per_bag * bag_count
+                except (ValueError, TypeError):
+                    record_data['total_weight'] = 0
+
+            # Generate PDF
             try:
                 pdf_path = PDFGenerator.generate_pdf(record_data)
                 if pdf_path:
-                    # Open the generated PDF
                     QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))
                 else:
                     QMessageBox.warning(self, "Print Error", "Failed to generate PDF report.")
@@ -572,6 +652,8 @@ class HistoryDialog(QDialog):
                 QMessageBox.critical(self, "PDF Generation Error", 
                                 f"Error generating PDF: {str(e)}")
 
+        except ValueError as ve:
+            QMessageBox.warning(self, "Data Error", str(ve))
         except Exception as e:
             QMessageBox.critical(self, "Error", 
                             f"Error preparing record data: {str(e)}")
