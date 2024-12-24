@@ -15,8 +15,8 @@ from camera_manager import CameraManager, AddCameraDialog
 
 # Camera configurations
 DEFAULT_CAMERAS = {
-    "Băng tải 1": "rtsp://admin:abcd1234@192.168.1.222:554/cam/realmonitor?channel=4&subtype=0",
-    "Băng tải 2": "rtsp://admin:abcd1234@192.168.1.222:554/cam/realmonitor?channel=3&subtype=0",
+    "Kho giữa": "rtsp://admin:abcd1234@192.168.1.222:554/cam/realmonitor?channel=4&subtype=0",
+    "Nhà máy dưới": "rtsp://admin:abcd1234@192.168.1.222:554/cam/realmonitor?channel=3&subtype=0",
 }
 
 class AppWindow(QWidget):
