@@ -206,25 +206,26 @@ class DetectionThread(QThread):
 
 
     def check_line_crossing(self, current_point, prev_point, line_pos, is_vertical):
-        """Enhanced line crossing detection with prediction"""
+        """Enhanced line crossing detection"""
         try:
-            # Direct crossing detection (existing logic)
             if is_vertical:
+                # Check if points are on opposite sides of the line
                 crossed = (prev_point[0] - line_pos) * (current_point[0] - line_pos) <= 0
                 if crossed:
+                    # Verify crossing direction matches count direction
                     if self.count_direction == "left_to_right":
-                        return 1 if prev_point[0] < line_pos else -1
+                        return 1 if prev_point[0] < line_pos and current_point[0] >= line_pos else 0
                     else:
-                        return 1 if prev_point[0] > line_pos else -1
+                        return 1 if prev_point[0] > line_pos and current_point[0] <= line_pos else 0
             else:
                 crossed = (prev_point[1] - line_pos) * (current_point[1] - line_pos) <= 0
                 if crossed:
+                    # For horizontal line, check x-direction movement
                     if self.count_direction == "left_to_right":
-                        return 1 if current_point[0] > prev_point[0] else -1
+                        return 1 if current_point[0] > prev_point[0] else 0
                     else:
-                        return 1 if current_point[0] < prev_point[0] else -1
+                        return 1 if current_point[0] < prev_point[0] else 0
             return 0
-            
         except Exception as e:
             print(f"Error in check_line_crossing: {e}")
             return 0
@@ -337,7 +338,50 @@ class DetectionThread(QThread):
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.putText(frame, f"Huong: {orientation}", (10, 110),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
+        
+    def track_bag(self, current_point, prev_bags, max_distance=100):
+        closest_bag_id = None
+        min_distance = float('inf')
+        current_time = time.time()
+        
+        # Look for closest match in previous bags
+        for bag_id, data in prev_bags.items():
+            if not data["positions"]:
+                continue
+                
+            prev_point = data["positions"][-1]
+            distance = np.sqrt((current_point[0] - prev_point[0])**2 + 
+                             (current_point[1] - prev_point[1])**2)
+            
+            # Consider time since last seen
+            time_unseen = current_time - data["last_seen"]
+            if distance < min_distance and distance < max_distance and time_unseen < self.tracking_memory:
+                min_distance = distance
+                closest_bag_id = bag_id
+                
+        # Create new track if no match found
+        if closest_bag_id is None:
+            closest_bag_id = self.next_bag_id
+            self.next_bag_id += 1
+            prev_bags[closest_bag_id] = {
+                "positions": [],
+                "last_seen": current_time,
+                "counted": False  # Track if this bag has been counted
+            }
+            
+        # Update tracking info
+        prev_bags[closest_bag_id]["last_seen"] = current_time
+        if not prev_bags[closest_bag_id]["positions"]:
+            prev_bags[closest_bag_id]["positions"] = [current_point]
+        else:
+            prev_bags[closest_bag_id]["positions"].append(current_point)
+            
+        # Keep only recent positions to avoid memory bloat
+        if len(prev_bags[closest_bag_id]["positions"]) > 10:
+            prev_bags[closest_bag_id]["positions"] = prev_bags[closest_bag_id]["positions"][-10:]
+                
+        return closest_bag_id
+       
     def run(self):
         cap = None
 
