@@ -15,7 +15,7 @@ class MasterApp(QWidget):
 
     def initUI(self):
         self.setWindowTitle('Rice Bag Counter Master App')
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 300, 200)
 
         layout = QVBoxLayout()
 

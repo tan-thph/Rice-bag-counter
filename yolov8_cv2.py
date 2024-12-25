@@ -23,18 +23,21 @@ class DetectionThread(QThread):
         self.stop_flag = False
         self._lock = Lock()
         
-        # Enhanced tracking variables
-        self.tracked_bags = {}  # Format: {bag_id: {"positions": [], "last_seen": timestamp, "counted": False}}
+        # Initialize tracking variables
+        self.tracked_bags = {}
         self.next_bag_id = 1
         self.bag_count = 0
-        self.tracking_memory = 10  # Frames to keep tracking an object after it disappears
-        self.min_track_points = 3  # Minimum points needed to establish direction
-        #self.prediction_threshold = 30 
         
         # Add new variables for duplicate prevention
         self.recent_counts = []  # List of (x, y, timestamp) tuples
         self.min_distance = 50   # Minimum pixels between counts
-        self.count_timeout = 0.5 # Seconds to wait before counting in same area
+        self.count_timeout = 0.7 # Seconds to wait before counting in same area
+        
+        # Initialize zone tracking
+        self.bags_in_zone = {}  # {bag_id: (position, entry_time, last_seen_time)}
+        self.disappeared_positions = {}  # Track last positions of disappeared bags
+        self.reappearance_threshold = 0.5  # Time threshold for considering reappearance (seconds)
+        self.zone_entry_positions = {}  # Track where bags entered the zone
         
         # Setup device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -109,6 +112,23 @@ class DetectionThread(QThread):
             print(f"Error setting up video capture: {e}")
             raise
 
+    def track_bag(self, current_point, prev_bags, max_distance=100):
+        """Track bags between frames using distance-based matching"""
+        closest_bag_id = None
+        min_distance = float('inf')
+        
+        for bag_id, prev_point in prev_bags.items():
+            distance = np.sqrt((current_point[0] - prev_point[0])**2 + 
+                             (current_point[1] - prev_point[1])**2)
+            if distance < min_distance and distance < max_distance:
+                min_distance = distance
+                closest_bag_id = bag_id
+                
+        if closest_bag_id is None:
+            closest_bag_id = self.next_bag_id
+            self.next_bag_id += 1
+            
+        return closest_bag_id
 
     def check_duplicate_count(self, x, y, current_time):
         """Check if a point is too close to recently counted points"""
@@ -126,179 +146,128 @@ class DetectionThread(QThread):
         self.recent_counts.append((x, y, current_time))
         return True
 
-    def track_bag(self, current_point, prev_bags, max_distance=100):
-        """Track bags between frames using distance-based matching"""
-        closest_bag_id = None
-        min_distance = float('inf')
-        current_time = time.time()
-        
-        for bag_id, data in prev_bags.items():
-            if not data["positions"]:
-                continue
-                
-            prev_point = data["positions"][-1]
-            distance = np.sqrt((current_point[0] - prev_point[0])**2 + 
-                             (current_point[1] - prev_point[1])**2)
-            
-            # Consider time since last seen
-            time_unseen = current_time - data["last_seen"]
-            if distance < min_distance and distance < max_distance and time_unseen < self.tracking_memory:
-                min_distance = distance
-                closest_bag_id = bag_id
-                
-        if closest_bag_id is None:
-            closest_bag_id = self.next_bag_id
-            self.next_bag_id += 1
-            prev_bags[closest_bag_id] = {
-                "positions": [],
-                "last_seen": current_time
-            }
-            
-        # Update last seen time and add position
-        prev_bags[closest_bag_id]["last_seen"] = current_time
-        if not prev_bags[closest_bag_id]["positions"]:
-            prev_bags[closest_bag_id]["positions"] = [current_point]
-        else:
-            prev_bags[closest_bag_id]["positions"].append(current_point)
-            
-        # Keep only recent positions
-        if len(prev_bags[closest_bag_id]["positions"]) > 10:
-            prev_bags[closest_bag_id]["positions"] = prev_bags[closest_bag_id]["positions"][-10:]
-            
-        return closest_bag_id
-    
-    def predict_crossing(self, positions, line_pos, is_vertical):
-        """Predict if object will cross the line based on trajectory"""
-        if len(positions) < self.min_track_points:
-            return False
-            
-        # Calculate movement direction
-        movement = []
-        for i in range(1, len(positions)):
-            if is_vertical:
-                movement.append(positions[i][0] - positions[i-1][0])  # X direction
-            else:
-                movement.append(positions[i][1] - positions[i-1][1])  # Y direction
-                
-        # Check if movement is consistent
-        if all(x > 0 for x in movement[-3:]) or all(x < 0 for x in movement[-3:]):
-            # Predict future position
-            avg_movement = sum(movement[-3:]) / 3
-            last_pos = positions[-1]
-            predicted_pos = (
-                last_pos[0] + avg_movement if is_vertical else last_pos[0],
-                last_pos[1] if is_vertical else last_pos[1] + avg_movement
-            )
-            
-            # Check if predicted position crosses line
-            if is_vertical:
-                if self.count_direction == "left_to_right":
-                    return last_pos[0] < line_pos and predicted_pos[0] >= line_pos
-                else:
-                    return last_pos[0] > line_pos and predicted_pos[0] <= line_pos
-            else:
-                if self.count_direction == "left_to_right":
-                    return predicted_pos[0] > last_pos[0]  # Moving right
-                else:
-                    return predicted_pos[0] < last_pos[0]  # Moving left
-                    
-        return False
-
-
     def check_line_crossing(self, current_point, prev_point, line_pos, is_vertical):
-        """Enhanced line crossing detection"""
+        """Modified check_line_crossing with duplicate prevention"""
         try:
+            current_time = time.time()
+            
             if is_vertical:
-                # Check if points are on opposite sides of the line
+                # For vertical line
                 crossed = (prev_point[0] - line_pos) * (current_point[0] - line_pos) <= 0
                 if crossed:
-                    # Verify crossing direction matches count direction
+                    # Check for duplicates before counting
+                    if not self.check_duplicate_count(current_point[0], current_point[1], current_time):
+                        return 0
+                        
                     if self.count_direction == "left_to_right":
-                        return 1 if prev_point[0] < line_pos and current_point[0] >= line_pos else 0
+                        return 1 if prev_point[0] < line_pos else -1
                     else:
-                        return 1 if prev_point[0] > line_pos and current_point[0] <= line_pos else 0
+                        return 1 if prev_point[0] > line_pos else -1
             else:
+                # For horizontal line
                 crossed = (prev_point[1] - line_pos) * (current_point[1] - line_pos) <= 0
                 if crossed:
-                    # For horizontal line, check x-direction movement
+                    # Check for duplicates before counting
+                    if not self.check_duplicate_count(current_point[0], current_point[1], current_time):
+                        return 0
+                        
                     if self.count_direction == "left_to_right":
-                        return 1 if current_point[0] > prev_point[0] else 0
+                        return 1 if current_point[0] > prev_point[0] else -1
                     else:
-                        return 1 if current_point[0] < prev_point[0] else 0
+                        return 1 if current_point[0] < prev_point[0] else -1
             return 0
         except Exception as e:
             print(f"Error in check_line_crossing: {e}")
             return 0
-            
+
     def process_frame(self, frame, model, line_pos):
-        """Process a single frame for bag detection and tracking"""
+        """Process frame with improved tracking and cleanup"""
         try:
             height, width = frame.shape[:2]
+            frame_size = (width, height)
             current_time = time.time()
             
-            # Draw detection line first
-            self.draw_detection_line(frame, line_pos)
-            
-            # Process detections
             results = model(frame, verbose=False)
             current_bags = {}
             count_change = 0
+            current_bag_ids = set()
             
-            # Process each detection
+            # Process detected bags
             if len(results) > 0:
                 for r in results:
                     boxes = r.boxes
                     for box in boxes:
                         try:
-                            # Filter detections
-                            if float(box.conf) < 0.5:
+                            if float(box.conf) < 0.6:
                                 continue
                                 
-                            # Get coordinates
                             x_min, y_min, x_max, y_max = map(int, box.xyxy[0])
+                            center = (x_max, y_min)
                             
-                            # Calculate center point based on orientation
-                            if self.is_vertical:
-                                center = (x_max, y_min)
-                            else:
-                                center = (x_max, y_min)
-                            
-                            # Track bag
                             bag_id = self.track_bag(center, self.tracked_bags)
+                            current_bags[bag_id] = center
+                            current_bag_ids.add(bag_id)
                             
-                            # Update tracking data
-                            if bag_id not in current_bags:
-                                current_bags[bag_id] = {"positions": [center], "last_seen": current_time}
-                            else:
-                                current_bags[bag_id]["positions"].append(center)
-                            
-                            # Check crossing if bag was previously tracked
                             if bag_id in self.tracked_bags:
-                                crossing_result = self.check_line_crossing(
+                                crossing_result = self.check_zone_crossing(
                                     center,
-                                    self.tracked_bags[bag_id]["positions"][-1],
+                                    self.tracked_bags[bag_id],
                                     line_pos,
-                                    self.is_vertical
+                                    self.is_vertical,
+                                    frame_size,
+                                    bag_id
                                 )
                                 count_change += crossing_result if crossing_result is not None else 0
                             
-                            # Draw detection visualization
-                            self.draw_detection(
-                                frame, 
-                                x_min, y_min, x_max, y_max,
-                                bag_id,
-                                self.tracked_bags.get(bag_id, {}).get("positions", [])
-                            )
-                            
+                            # Draw visualization
+                            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                            cv2.circle(frame, center, 5, (255, 0, 0), -1)
+                            cv2.putText(frame, f"Bag {bag_id}", (x_min, y_min - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    
+                            # Draw movement vector
+                            if bag_id in self.tracked_bags:
+                                prev_pos = self.tracked_bags[bag_id]
+                                cv2.arrowedLine(frame, prev_pos, center, (0, 255, 255), 2)
+                                
                         except Exception as box_error:
                             print(f"Error processing box: {box_error}")
                             continue
             
+            # Handle disappeared bags and cleanup
+            disappeared_bags = []
+            for bag_id in list(self.bags_in_zone.keys()):
+                if bag_id not in current_bag_ids:
+                    last_seen_time = self.bags_in_zone[bag_id][2]
+                    if current_time - last_seen_time > 0.5:  # If bag hasn't been seen for 0.5 seconds
+                        disappeared_bags.append(bag_id)
+                        # Only count the bag once when it disappears
+                        if bag_id not in self.disappeared_positions:
+                            crossing_result = self.handle_disappeared_bag(bag_id, frame_size, line_pos)
+                            count_change += crossing_result
+            
+            # Clean up disappeared bags
+            for bag_id in disappeared_bags:
+                if bag_id in self.bags_in_zone:
+                    del self.bags_in_zone[bag_id]
+                if bag_id in self.zone_entry_positions:
+                    del self.zone_entry_positions[bag_id]
+            
+            # Update tracked bags
+            self.tracked_bags = current_bags
+            
+            # Debug information
+            print(f"Current frame stats:")
+            print(f"- Active bags: {len(current_bags)}")
+            print(f"- Bags in zone: {len(self.bags_in_zone)}")
+            print(f"- Count change this frame: {count_change}")
+            
             return frame, current_bags, count_change
-        
+            
         except Exception as e:
             print(f"Error in process_frame: {e}")
             return frame, {}, 0
+
 
     def draw_detection_line(self, frame, line_pos):
         """Draw the detection line on the frame"""
@@ -308,23 +277,155 @@ class DetectionThread(QThread):
         else:
             cv2.line(frame, (0, line_pos), (width, line_pos), (255, 0, 0), 2)
 
-    def draw_detection(self, frame, x_min, y_min, x_max, y_max, bag_id, positions):
-        """Draw detection visualization"""
-        # Draw bounding box
-        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+    def draw_detection_zone(self, frame, line_pos):
+        """Draw the detection zone on the frame"""
+        height, width = frame.shape[:2]
         
-        # Draw center point
-        center = (int((x_min + x_max)/2), int(y_min))
-        cv2.circle(frame, center, 5, (255, 0, 0), -1)
-        
-        # Draw ID
-        cv2.putText(frame, f"Bag {bag_id}", (x_min, y_min - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        if self.is_vertical:
+            zone_width = int(width * 0.08)  # 8% of frame width
+            # Draw main detection line
+            cv2.line(frame, (line_pos, 0), (line_pos, height), (255, 0, 0), 2)
+            # Draw zone boundaries
+            cv2.line(frame, (line_pos - zone_width, 0), (line_pos - zone_width, height), (255, 0, 0), 1)
+            cv2.line(frame, (line_pos + zone_width, 0), (line_pos + zone_width, height), (255, 0, 0), 1)
+            # Fill zone with semi-transparent color
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (line_pos - zone_width, 0), (line_pos + zone_width, height), (255, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
+        else:
+            zone_height = int(height * 0.08)  # 8% of frame height
+            # Draw main detection line
+            cv2.line(frame, (0, line_pos), (width, line_pos), (255, 0, 0), 2)
+            # Draw zone boundaries
+            cv2.line(frame, (0, line_pos - zone_height), (width, line_pos - zone_height), (255, 0, 0), 1)
+            cv2.line(frame, (0, line_pos + zone_height), (width, line_pos + zone_height), (255, 0, 0), 1)
+            # Fill zone with semi-transparent color
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, line_pos - zone_height), (width, line_pos + zone_height), (255, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
+
+
+    def check_zone_crossing(self, current_point, prev_point, line_pos, is_vertical, frame_size, bag_id):
+        """Enhanced zone crossing detection with improved tracking"""
+        try:
+            current_time = time.time()
+            current_in_zone = self.is_point_in_zone(current_point, line_pos, frame_size)
+            
+            #print(f"Bag {bag_id} - In zone: {current_in_zone}, Position: {current_point}")
+            
+            # Handle new appearance inside zone
+            if current_in_zone and bag_id not in self.bags_in_zone:
+                #print(f"Bag {bag_id} appeared inside zone")
+                self.bags_in_zone[bag_id] = (current_point, current_time, current_time)
+                self.zone_entry_positions[bag_id] = current_point
+                return 0
+
+            # Update tracking for existing bags
+            if current_in_zone:
+                if bag_id in self.bags_in_zone:
+                    #print(f"Bag {bag_id} still in zone")
+                    self.bags_in_zone[bag_id] = (current_point, 
+                                            self.bags_in_zone[bag_id][1],
+                                            current_time)
+                else:
+                    #print(f"Bag {bag_id} entered zone")
+                    self.bags_in_zone[bag_id] = (current_point, current_time, current_time)
+                    self.zone_entry_positions[bag_id] = current_point
+            elif bag_id in self.bags_in_zone:
+                # Bag is exiting the zone
+                entry_pos = self.zone_entry_positions.get(bag_id)
+                if entry_pos:
+                    #print(f"Bag {bag_id} exiting zone. Entry pos: {entry_pos}, Exit pos: {current_point}")
                     
-        # Draw trajectory if we have positions
-        if len(positions) > 1:
-            points = np.array(positions, dtype=np.int32)
-            cv2.polylines(frame, [points.reshape((-1, 1, 2))], False, (0, 255, 255), 2)
+                    # Calculate movement
+                    dx = current_point[0] - entry_pos[0]
+                    
+                    # Clean up tracking before counting
+                    del self.bags_in_zone[bag_id]
+                    del self.zone_entry_positions[bag_id]
+                    
+                    # Check for duplicates
+                    if not self.check_duplicate_count(current_point[0], current_point[1], current_time):
+                        #print(f"Bag {bag_id} too close to recent count")
+                        return 0
+                    
+                    # Count based on movement
+                    if abs(dx) > 20:  # Minimum movement threshold
+                        moving_right = dx > 0
+                        if self.count_direction == "left_to_right":
+                            count_value = 1 if moving_right else -1
+                        else:
+                            count_value = 1 if not moving_right else -1
+                        #print(f"Bag {bag_id} counted: {count_value} (dx={dx})")
+                        return count_value
+                    else:
+                        print(f"Bag {bag_id} had insufficient movement (dx={dx})")
+                        
+            return 0
+            
+        except Exception as e:
+            print(f"Error in check_zone_crossing: {e}")
+            return 0
+
+    def is_point_in_zone(self, point, line_pos, frame_size):
+        """Helper to check if a point is in the zone"""
+        if self.is_vertical:
+            zone_width = frame_size[0] * 0.1
+            zone_start = line_pos - zone_width
+            zone_end = line_pos + zone_width
+            return zone_start <= point[0] <= zone_end
+        else:
+            zone_height = frame_size[1] * 0.1
+            zone_start = line_pos - zone_height
+            zone_end = line_pos + zone_height
+            return zone_start <= point[1] <= zone_end
+
+    def handle_disappeared_bag(self, bag_id, frame_size, line_pos):
+        """Handle counting logic for disappeared bags"""
+        try:
+            if bag_id in self.bags_in_zone:
+                last_position = self.bags_in_zone[bag_id][0]
+                entry_position = self.zone_entry_positions.get(bag_id)
+                
+                # Store the last known position
+                self.disappeared_positions[bag_id] = (last_position, time.time())
+                
+                # If bag disappeared while in zone, determine count based on entry vs last position
+                if entry_position:
+                    # Calculate movement
+                    dx = last_position[0] - entry_position[0]
+                    
+                    # For vertical detection line
+                    if self.is_vertical:
+                        if abs(dx) > 20:  # Minimum movement threshold
+                            moving_right = dx > 0
+                            if self.count_direction == "left_to_right":
+                                count_value = 1 if moving_right else -1
+                            else:
+                                count_value = 1 if not moving_right else -1
+                            #print(f"Disappeared bag {bag_id} counted: {count_value} (dx={dx})")
+                            return count_value
+                        else:
+                            print(f"Disappeared bag {bag_id} had insufficient movement (dx={dx})")
+                    else:
+                        # Similar logic for horizontal line
+                        if abs(dx) > 20:
+                            moving_right = dx > 0
+                            if self.count_direction == "left_to_right":
+                                count_value = 1 if moving_right else -1
+                            else:
+                                count_value = 1 if not moving_right else -1
+                            print(f"Disappeared bag {bag_id} counted: {count_value} (dx={dx})")
+                            return count_value
+                        else:
+                            print(f"Disappeared bag {bag_id} had insufficient movement (dx={dx})")
+                
+            return 0
+                
+        except Exception as e:
+            print(f"Error handling disappeared bag: {e}")
+            return 0
+
 
     def add_info_overlay(self, frame, bag_count):
         """Add information overlay to the frame"""
@@ -338,50 +439,7 @@ class DetectionThread(QThread):
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.putText(frame, f"Huong: {orientation}", (10, 110),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-    def track_bag(self, current_point, prev_bags, max_distance=100):
-        closest_bag_id = None
-        min_distance = float('inf')
-        current_time = time.time()
-        
-        # Look for closest match in previous bags
-        for bag_id, data in prev_bags.items():
-            if not data["positions"]:
-                continue
-                
-            prev_point = data["positions"][-1]
-            distance = np.sqrt((current_point[0] - prev_point[0])**2 + 
-                             (current_point[1] - prev_point[1])**2)
-            
-            # Consider time since last seen
-            time_unseen = current_time - data["last_seen"]
-            if distance < min_distance and distance < max_distance and time_unseen < self.tracking_memory:
-                min_distance = distance
-                closest_bag_id = bag_id
-                
-        # Create new track if no match found
-        if closest_bag_id is None:
-            closest_bag_id = self.next_bag_id
-            self.next_bag_id += 1
-            prev_bags[closest_bag_id] = {
-                "positions": [],
-                "last_seen": current_time,
-                "counted": False  # Track if this bag has been counted
-            }
-            
-        # Update tracking info
-        prev_bags[closest_bag_id]["last_seen"] = current_time
-        if not prev_bags[closest_bag_id]["positions"]:
-            prev_bags[closest_bag_id]["positions"] = [current_point]
-        else:
-            prev_bags[closest_bag_id]["positions"].append(current_point)
-            
-        # Keep only recent positions to avoid memory bloat
-        if len(prev_bags[closest_bag_id]["positions"]) > 10:
-            prev_bags[closest_bag_id]["positions"] = prev_bags[closest_bag_id]["positions"][-10:]
-                
-        return closest_bag_id
-       
+
     def run(self):
         cap = None
 
@@ -425,7 +483,7 @@ class DetectionThread(QThread):
                 self.bag_count = max(0, self.bag_count + count_change)
                 
                 # Draw visualizations with updated parameters
-                self.draw_detection_line(frame, line_pos)
+                self.draw_detection_zone(frame, line_pos)  # Changed from draw_detection_line
                 self.add_info_overlay(frame, self.bag_count)
                 
                 # Emit update
@@ -443,10 +501,3 @@ class DetectionThread(QThread):
     def stop(self):
         """Stop the detection thread"""
         self.stop_flag = True
-
-def main(input_source, window_name, emit_frame_signal, check_stop, cap, get_line_position, get_is_vertical, get_count_direction):
-    """Legacy main function for backwards compatibility"""
-    thread = DetectionThread(input_source, window_name, get_line_position(), get_is_vertical(), get_count_direction())
-    thread.update_frame.connect(emit_frame_signal)
-    thread.start()
-    return thread.bag_count
