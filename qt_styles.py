@@ -33,7 +33,7 @@ class StyleSheet:
             /* Base Styles */
             QWidget {{
                 font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
+                font-size: 15px;
                 color: {colors['text-primary']};
                 background-color: {colors['bg-main']};
             }}
@@ -55,7 +55,7 @@ class StyleSheet:
                 font-weight: 600;
                 min-width: 140px;
                 min-height: 48px;
-                font-size: 16px;
+                font-size: 15px;
             }}
             
             QPushButton:disabled {{
@@ -139,7 +139,7 @@ class StyleSheet:
             }}
             
             QLabel#sectionTitle {{
-                font-size: 22px;  /* Reduced font size */
+                font-size: 20px;  /* Reduced font size */
                 font-weight: bold;
                 margin-bottom: 12px;
             }}
@@ -179,7 +179,7 @@ class StyleSheet:
                 border: 1px solid {colors['border']};
                 border-radius: 6px;
                 padding: 4px;
-                font-size: 16px;
+                font-size: 15px;
                 background: {colors['bg-card']};
             }}
             
@@ -197,14 +197,14 @@ class StyleSheet:
             QHeaderView::section {{
                 background-color: {colors['bg-main']};
                 padding: 8px;
-                font-size: 16px;
+                font-size: 15px;
                 font-weight: bold;
                 border: 1px solid {colors['border']};
             }}
             
             /* RadioButton Styles */
             QRadioButton {{
-                font-size: 16px;
+                font-size: 15px;
                 spacing: 8px;
             }}
             
@@ -244,10 +244,10 @@ class StyleSheet:
                 border: none;
                 padding: 8px;
                 border-radius: 4px;
-                font-size: 16px;
+                font-size: 15px;
             }}
             QLabel#valueLabel {{
-                font-size: 16px;
+                font-size: 15px;
                 color: #1f2937;
                 font-weight: bold;
                 background: #f3f4f6;
@@ -263,7 +263,7 @@ class StyleSheet:
             }}
 
             QLabel#fieldLabel {{
-                font-size: 16px;
+                font-size: 15px;
                 color: #374151;
                 font-weight: 500;
             }}
@@ -304,7 +304,7 @@ class StyleSheet:
                 background-color: {colors['text-secondary']};
                 border: 1px solid {colors['border']};
                 border-radius: 4px;
-                font-size: 16px;
+                font-size: 15px;
                 padding: 0;
                 margin: 0 2px;
                 width: 32px;
@@ -334,6 +334,52 @@ class StyleSheet:
             QPushButton#addButton:pressed, QPushButton#removeButton:pressed {{
                 background-color: {colors['text-primary']};
             }}
+
+            #startButton, #loadButton, #stopButton, #changeButton, #pauseButton {{
+                border: none;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: 500;
+                padding: 8px 16px;
+            }}
+            
+            #pauseButton {{
+                background-color: #6366f1;  /* Indigo */
+                color: white;
+            }}
+            
+            #pauseButton:hover {{
+                background-color: #4f46e5;
+            }}
+            
+            #pauseButton:disabled {{
+                background-color: #9ca3af;
+                color: #e5e7eb;
+            }}
+
+                        #changeButton {{
+                background-color: #f59e0b;  /* Orange */
+                color: white;
+            }}
+            
+            #changeButton:hover {{
+                background-color: #d97706;
+            }}
+            
+            #changeButton:disabled {{
+                background-color: #9ca3af;
+                color: #e5e7eb;
+            }}
+             /* Footer Styles */
+            
+            QLabel#copyrightText {{
+                color: #9CA3AF;
+                font-size: 13px;
+                font-weight: 500;
+                padding: 4px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+
         """
 
     @staticmethod
@@ -345,7 +391,7 @@ class StyleSheet:
         
         QTableWidget {
             gridline-color: #e5e7eb;
-            font-size: 22px;
+            font-size: 20px;
         }
         
         QTableWidget::item {
@@ -355,7 +401,7 @@ class StyleSheet:
         QHeaderView::section {
             background-color: #f3f4f6;
             padding: 12px;
-            font-size: 22px;
+            font-size: 20px;
             font-weight: bold;
             border: 1px solid #e5e7eb;
         }
@@ -365,7 +411,7 @@ class StyleSheet:
             color: white;
             border: none;
             border-radius: 6px;
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 500;
             padding: 8px 16px;
         }
@@ -382,11 +428,11 @@ class StyleSheet:
             padding: 8px;
             border: 1px solid #e5e7eb;
             border-radius: 4px;
-            font-size: 16px;
+            font-size: 15px;
         }
         
         QLabel {
-            font-size: 16px;
+            font-size: 15px;
         }
         """
 
@@ -402,7 +448,7 @@ class StyleSheet:
             }}
             
             QDialog QLabel {{
-                font-size: 16px;
+                font-size: 15px;
                 color: {colors['text-secondary']};
                 font-weight: 500;
             }}
@@ -412,7 +458,7 @@ class StyleSheet:
                 border-radius: 6px;
                 padding: 12px;
                 background: {colors['bg-card']};
-                font-size: 16px;
+                font-size: 15px;
             }}
             
             QDialog QComboBox {{
@@ -420,7 +466,7 @@ class StyleSheet:
                 border-radius: 6px;
                 padding: 12px;
                 background: {colors['bg-card']};
-                font-size: 16px;
+                font-size: 15px;
             }}
             
             /* Updated button styles */
@@ -432,7 +478,7 @@ class StyleSheet:
                 border-radius: 8px;
                 min-width: 120px;
                 font-weight: 600;
-                font-size: 16px;
+                font-size: 15px;
             }}
             
             /* Style for the default (OK) button */
@@ -454,7 +500,7 @@ class StyleSheet:
                 border-radius: 6px;
                 min-width: 100px;
                 font-weight: 500;
-                font-size: 16px;
+                font-size: 15px;
                 margin: 0 5px;
             }}
             

@@ -1,0 +1,8 @@
+opencv-python==4.8.1.78
+numpy==1.24.3
+torch==2.1.0
+ultralytics==8.3.53
+PyQt5==5.15.9
+reportlab==4.0.7
+matplotlib==3.8.2
+pyinstaller==6.2.0

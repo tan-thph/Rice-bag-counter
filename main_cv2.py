@@ -29,7 +29,14 @@ class AppWindow(QWidget):
         self.current_source_type = None
         self.current_video_path = None
         self.camera_manager = CameraManager()
+        self.is_paused = False
+        self.changing_camera = False
+        
         self.init_ui()
+        
+        # Make sure the update button is disabled at start
+        self.update_button.setEnabled(False)
+        
         self.connect_signals()
         self.load_existing_records()
 
@@ -38,8 +45,14 @@ class AppWindow(QWidget):
         self.setWindowTitle("Rice Bag Counter")
         self.setMinimumSize(1905, 900)
         
-        # Main layout
-        main_layout = QHBoxLayout(self)
+        # Create main widget and layout
+        main_widget = QWidget()
+        main_vertical_layout = QVBoxLayout(main_widget)
+        main_vertical_layout.setContentsMargins(10, 10, 10, 10)  # Add margins
+        main_vertical_layout.setSpacing(10)  # Add spacing between elements
+        
+        # Create horizontal layout for main content
+        main_content_layout = QHBoxLayout()
         left_panel = QVBoxLayout()
         right_panel = QVBoxLayout()
         
@@ -47,9 +60,28 @@ class AppWindow(QWidget):
         self.setup_video_panel(left_panel)
         self.setup_control_panel(right_panel)
         
-        # Add panels to main layout
-        main_layout.addLayout(left_panel, 2)  # Video takes 2/3 of width
-        main_layout.addLayout(right_panel, 1)  # Controls take 1/3 of width
+        # Add panels to main content layout
+        main_content_layout.addLayout(left_panel, 2)
+        main_content_layout.addLayout(right_panel, 1)
+        
+        # Create footer
+        footer = QFrame()
+        footer.setObjectName("footer")
+        footer.setFixedHeight(50)  # Set fixed height for footer
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(20, 0, 20, 0)  # Add horizontal padding
+        
+        copyright_text = QLabel("© 2024 Nhà Máy Xay Xát Gạo Thạnh Hương")
+        copyright_text.setObjectName("copyrightText")
+        copyright_text.setAlignment(Qt.AlignCenter)
+        footer_layout.addWidget(copyright_text)
+        
+        # Add layouts to main vertical layout
+        main_vertical_layout.addLayout(main_content_layout, 1)  # 1 is the stretch factor
+        main_vertical_layout.addWidget(footer, 0)  # 0 means no stretch
+        
+        # Set the main widget as the central widget
+        self.setLayout(main_vertical_layout)
 
     def init_camera_management(self):
         """Initialize camera management UI"""
@@ -79,7 +111,7 @@ class AppWindow(QWidget):
         # Setup remove camera button
         self.remove_camera_button = QPushButton("➖")
         self.remove_camera_button.setObjectName("removeButton")
-        self.remove_camera_button.setToolTip("Remove Custom Camera")
+        self.remove_camera_button.setToolTip("Xóa camera")
         self.remove_camera_button.clicked.connect(self.remove_selected_camera)
         self.remove_camera_button.setFixedSize(32, 32)  # Match combo box height
 
@@ -120,14 +152,14 @@ class AppWindow(QWidget):
                 self.load_cameras()
                 msg_box = QMessageBox(self)
                 msg_box.setWindowTitle("Success")
-                msg_box.setText(f"Camera '{name}' added successfully!")
+                msg_box.setText(f"Camera '{name}' đã thêm thành công!")
                 msg_box.setIcon(QMessageBox.Information)
                 msg_box.setStyleSheet(StyleSheet.get_message_box_style())
                 msg_box.exec_()
             except Exception as e:
                 msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Error")
-                msg_box.setText(f"Failed to add camera: {str(e)}")
+                msg_box.setWindowTitle("Lỗi")
+                msg_box.setText(f"Không thể thêm camera: {str(e)}")
                 msg_box.setIcon(QMessageBox.Critical)
                 msg_box.setStyleSheet(StyleSheet.get_message_box_style())
                 msg_box.exec_()
@@ -138,8 +170,8 @@ class AppWindow(QWidget):
         
         if current_camera in DEFAULT_CAMERAS:
             msg = QMessageBox()
-            msg.setWindowTitle("Remove Error")
-            msg.setText("Cannot remove default cameras")
+            msg.setWindowTitle("Lỗi")
+            msg.setText("Không thể xóa camera mặc định")
             msg.setIcon(QMessageBox.Warning)
             msg.setStandardButtons(QMessageBox.Ok)  # Use StandardButtons
             msg.setStyleSheet(StyleSheet.get_message_box_style())
@@ -179,90 +211,100 @@ class AppWindow(QWidget):
                     error.exec_()
                     
     def start_camera(self):
-        """Start detection using selected camera"""
-        try:
-            selected_camera = self.camera_combo.currentText()         
-            source = None
-            
-            # First check if it's the default camera
-            if selected_camera == "Default":
-                source = 0
-                print("Nguồn test: 0")
-            else:
-                # Check custom cameras first
-                source = self.camera_manager.get_camera_url(selected_camera)
-                if source:
-                    print(f"Found custom camera URL: {source}")
-                else:
-                    # Then check default cameras
-                    source = DEFAULT_CAMERAS.get(selected_camera)
-                    print(f"Found default camera URL: {source}")
+            """Start detection using selected camera"""
+            try:
+                selected_camera = self.camera_combo.currentText()         
+                source = None
                 
-                if source is None:
-                    raise ValueError(f"Camera URL không tìm thấy cho {selected_camera}")
-            
-            self.start_detection(source, "Camera")
+                if selected_camera == "Default":
+                    source = 0
+                else:
+                    source = self.camera_manager.get_camera_url(selected_camera)
+                    if source:
+                        print(f"Found custom camera URL: {source}")
+                    else:
+                        source = DEFAULT_CAMERAS.get(selected_camera)
+                        #print(f"Found default camera URL: {source}")
+                    
+                    if source is None:
+                        raise ValueError(f"Camera URL không tìm thấy: {selected_camera}")
+                
+                self.start_detection(source, "Camera", 0)
 
-        except Exception as e:
-            QMessageBox.critical(self, "Camera Error", f"Failed to start camera: {str(e)}")
-            self.update_ui_state(running=False) 
+            except Exception as e:
+                QMessageBox.critical(self, "Camera lỗi", f"Không thể khởi động camera: {str(e)}")
+                self.update_ui_state(running=False)  
+
 
     def setup_video_panel(self, layout):
-        """Setup the video display and camera controls"""
-        # Add camera management header
-        layout.addLayout(self.init_camera_management())
-        
-        # Video display
-        video_container = QWidget()
-        video_container.setFixedSize(1280, 720)
-        video_container.setStyleSheet("background-color: #111827; border-radius: 4px;")
-        
-        self.video_label = QLabel()
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(1280, 720)
-        self.video_label.setMaximumSize(1280, 720)
-        self.video_label.setStyleSheet("background-color: transparent;")
-        
-        # Add video label to container
-        video_layout = QVBoxLayout(video_container)
-        video_layout.setContentsMargins(0, 0, 0, 0)
-        video_layout.addWidget(self.video_label)
-        
-        # Add video container to main layout
-        layout.addWidget(video_container, 0, Qt.AlignCenter)
-        
-        # Button container with fixed width matching video feed
-        button_container = QWidget()
-        button_container.setFixedWidth(1280)
-        button_layout = QHBoxLayout(button_container)
-        button_layout.setSpacing(20)
-        button_layout.setContentsMargins(0, 10, 0, 10)
-        
-        # Create buttons with consistent size
-        self.start_camera_btn = QPushButton("Camera")
-        self.start_video_btn = QPushButton("Video")
-        self.stop_btn = QPushButton("Stop")
-        
-        # Set object names for styling
-        self.start_camera_btn.setObjectName("startButton")
-        self.start_video_btn.setObjectName("loadButton")
-        self.stop_btn.setObjectName("stopButton")
-        
-        # Set fixed sizes for all buttons
-        button_width = 150
-        button_height = 40
-        for btn in [self.start_camera_btn, self.start_video_btn, self.stop_btn]:
-            btn.setFixedSize(button_width, button_height)
-        
-        # Add buttons to layout with center alignment
-        button_layout.addStretch()
-        button_layout.addWidget(self.start_camera_btn)
-        button_layout.addWidget(self.start_video_btn)
-        button_layout.addWidget(self.stop_btn)
-        button_layout.addStretch()
-        
-        # Add button container to main layout
-        layout.addWidget(button_container, 0, Qt.AlignCenter)
+            """Setup the video display and camera controls"""
+            # Add camera management header
+            layout.addLayout(self.init_camera_management())
+            
+            # Video display
+            video_container = QWidget()
+            video_container.setFixedSize(1280, 720)
+            video_container.setStyleSheet("background-color: #111827; border-radius: 4px;")
+            
+            self.video_label = QLabel()
+            self.video_label.setAlignment(Qt.AlignCenter)
+            self.video_label.setMinimumSize(1280, 720)
+            self.video_label.setMaximumSize(1280, 720)
+            self.video_label.setStyleSheet("background-color: transparent;")
+            
+            # Add video label to container
+            video_layout = QVBoxLayout(video_container)
+            video_layout.setContentsMargins(0, 0, 0, 0)
+            video_layout.addWidget(self.video_label)
+            
+            # Add video container to main layout
+            layout.addWidget(video_container, 0, Qt.AlignCenter)
+            
+            # Button container with fixed width matching video feed
+            button_container = QWidget()
+            button_container.setFixedWidth(1280)
+            button_layout = QHBoxLayout(button_container)
+            button_layout.setSpacing(20)
+            button_layout.setContentsMargins(0, 10, 0, 10)
+            
+            # Create buttons with consistent size
+            self.start_camera_btn = QPushButton("Camera")
+            self.start_video_btn = QPushButton("Video")
+            self.change_camera_btn = QPushButton("Đổi Camera")
+            self.pause_btn = QPushButton("Tạm dừng")
+            self.stop_btn = QPushButton("Ngưng bộ đếm")
+            
+            # Set object names for styling
+            self.start_camera_btn.setObjectName("startButton")
+            self.start_video_btn.setObjectName("loadButton")
+            self.change_camera_btn.setObjectName("changeButton")
+            self.pause_btn.setObjectName("pauseButton")
+            self.stop_btn.setObjectName("stopButton")
+            
+            # Set initial button states
+            self.change_camera_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+            
+            # Set fixed sizes for all buttons
+            button_width = 150
+            button_height = 40
+            for btn in [self.start_camera_btn, self.start_video_btn, 
+                    self.change_camera_btn, self.pause_btn, self.stop_btn]:
+                btn.setFixedSize(button_width, button_height)
+            
+            # Add buttons to layout with center alignment
+            button_layout.addStretch()
+            button_layout.addWidget(self.start_camera_btn)
+            button_layout.addWidget(self.start_video_btn)
+            button_layout.addWidget(self.change_camera_btn)
+            button_layout.addWidget(self.pause_btn)
+            button_layout.addWidget(self.stop_btn)
+            button_layout.addStretch()
+            
+            # Add button container to main layout
+            layout.addWidget(button_container, 0, Qt.AlignCenter)
+
 
     def setup_control_panel(self, layout):
         """Setup the control panel with detection settings and info"""
@@ -278,13 +320,11 @@ class AppWindow(QWidget):
         
         # Line orientation controls
         orientation_layout = QHBoxLayout()
-        orientation_layout.setSpacing(5)
         orientation_label = QLabel("Thanh đếm:")
         orientation_label.setObjectName("fieldLabel")
         self.vertical_radio = QRadioButton("Thanh Dọc")
         self.horizontal_radio = QRadioButton("Thanh Ngang")
         
-        # Create orientation button group
         self.orientation_group = QButtonGroup(self)
         self.orientation_group.addButton(self.vertical_radio)
         self.orientation_group.addButton(self.horizontal_radio)
@@ -294,29 +334,30 @@ class AppWindow(QWidget):
         orientation_layout.addWidget(self.vertical_radio)
         orientation_layout.addWidget(self.horizontal_radio)
         orientation_layout.addStretch()
-        
+
         # Count direction controls
         direction_layout = QHBoxLayout()
-        direction_layout.setSpacing(5)
         direction_label = QLabel("Hướng đếm:")
         direction_label.setObjectName("fieldLabel")
-        self.left_to_right = QRadioButton("Trái → Phải")
-        self.right_to_left = QRadioButton("Phải → Trái")
         
-        # Create direction button group
+        direction_radio_container = QVBoxLayout()
+        self.left_to_right = QRadioButton("Trái → Phải / Lên")
+        self.right_to_left = QRadioButton("Phải → Trái / Xuống")
+        
         self.direction_group = QButtonGroup(self)
         self.direction_group.addButton(self.left_to_right)
         self.direction_group.addButton(self.right_to_left)
         self.left_to_right.setChecked(True)
         
+        direction_radio_container.addWidget(self.left_to_right)
+        direction_radio_container.addWidget(self.right_to_left)
+        
         direction_layout.addWidget(direction_label)
-        direction_layout.addWidget(self.left_to_right)
-        direction_layout.addWidget(self.right_to_left)
+        direction_layout.addLayout(direction_radio_container)
         direction_layout.addStretch()
         
         # Line position control
         position_layout = QHBoxLayout()
-        position_layout.setSpacing(5)
         position_label = QLabel("Vị trí:")
         position_label.setObjectName("fieldLabel")
         self.detection_line_position = QDoubleSpinBox()
@@ -329,20 +370,20 @@ class AppWindow(QWidget):
         position_layout.addWidget(self.detection_line_position)
         position_layout.addStretch()
         
-        # Update button with reduced size
+        # Update button
         self.update_button = QPushButton("Cập nhật")
         self.update_button.setObjectName("updateButton")
         self.update_button.setToolTip("Cập nhật vị trí và hướng đếm")
         self.update_button.clicked.connect(self.update_detection_line)
         self.update_button.setEnabled(False)
-        self.update_button.setFixedHeight(25)  # Reduced height
-        self.update_button.setFixedWidth(100)  # Added width constraint
+        self.update_button.setFixedHeight(25)
+        self.update_button.setFixedWidth(100)
         
         # Add all controls to line group
         line_layout.addLayout(orientation_layout)
         line_layout.addLayout(direction_layout)
         line_layout.addLayout(position_layout)
-        line_layout.addWidget(self.update_button, 0, Qt.AlignLeft)  # Align left
+        line_layout.addWidget(self.update_button, 0, Qt.AlignLeft)
         
         layout.addWidget(line_group)
         
@@ -361,7 +402,7 @@ class AppWindow(QWidget):
         
         self.commodity = QLineEdit()
         self.commodity.setPlaceholderText("Nhập loại hàng")
-
+        
         self.order_number = QLineEdit()
         self.order_number.setPlaceholderText("Nhập số đơn hàng")
         
@@ -372,7 +413,7 @@ class AppWindow(QWidget):
         self.total_weight = QLabel("0.0 kg")
         self.total_weight.setObjectName("valueLabel")
         
-        # Add fields to layout
+        # Add fields to info layout
         fields = [
             ("Tên khách hàng:", self.customer_name),
             ("Biển số xe:", self.truck_number),
@@ -389,37 +430,39 @@ class AppWindow(QWidget):
             info_layout.addWidget(widget, i, 1)
         
         layout.addWidget(info_group)
-
+        
         # 3. Status Display Card
         status_group = QFrame()
         status_group.setObjectName("card")
         status_layout = QVBoxLayout(status_group)
         status_layout.setSpacing(5)
-
+        
+        # Status label
         self.status_label = QLabel("Bộ đếm sẵn sàng!")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
         self.status_label.setMinimumHeight(60)
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         status_layout.addWidget(self.status_label)
-
+        
+        # Count label
         self.count_label = QLabel("Số lượng bao: 0")
         self.count_label.setObjectName("countLabel")
         status_layout.addWidget(self.count_label)
-
-        # View History button with reduced size
+        
+        # View History button
         self.view_history_btn = QPushButton("Xem Lịch Sử")
         self.view_history_btn.setObjectName("historyButton")
-        self.view_history_btn.setFixedHeight(25)  # Reduced height
-        self.view_history_btn.setFixedWidth(100)  # Added width constraint
+        self.view_history_btn.setFixedHeight(25)
+        self.view_history_btn.setFixedWidth(100)
         self.view_history_btn.clicked.connect(self.show_history)
         
-        # Add the button in a new horizontal layout for left alignment
+        # Add button in aligned layout
         history_btn_layout = QHBoxLayout()
         history_btn_layout.addWidget(self.view_history_btn)
         history_btn_layout.addStretch()
         status_layout.addLayout(history_btn_layout)
-
+        
         layout.addWidget(status_group)
 
     def connect_signals(self):
@@ -427,6 +470,8 @@ class AppWindow(QWidget):
         self.start_camera_btn.clicked.connect(self.start_camera)
         self.start_video_btn.clicked.connect(self.start_video)
         self.stop_btn.clicked.connect(self.stop_detection)
+        self.change_camera_btn.clicked.connect(self.change_camera)
+        self.pause_btn.clicked.connect(self.toggle_pause)
         self.weight_per_bag.textChanged.connect(self.update_total_weight)
         self.camera_combo.currentTextChanged.connect(self.on_camera_selected)
             
@@ -444,10 +489,10 @@ class AppWindow(QWidget):
             self, "Select Video", "", "Video Files (*.mp4 *.avi *.mov)"
         )
         if video_path:
-            self.start_detection(video_path, "Video")
+            self.start_detection(video_path, "Video", 0)
 
-    def start_detection(self, source, source_type):
-        """Start the detection process"""
+    def start_detection(self, source, source_type, initial_count=0):
+        """Start the detection process with optional initial count"""
         try:
             if self.detection_thread and self.detection_thread.isRunning():
                 self.stop_detection()
@@ -459,6 +504,11 @@ class AppWindow(QWidget):
                 self.vertical_radio.isChecked(),
                 "left_to_right" if self.left_to_right.isChecked() else "right_to_left"
             )
+            
+            # Set initial count if provided
+            if initial_count > 0:
+                self.detection_thread.bag_count = initial_count
+                self.last_bag_count = initial_count
             
             self.current_source_type = source_type
             if source_type == "Video":
@@ -475,9 +525,10 @@ class AppWindow(QWidget):
             self.update_ui_state(running=True)  
             self.status_label.setText(f"Đang đếm với ({source_type})")
             self.update_button.setEnabled(True)
+            self.is_paused = False  # Reset pause state
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to start detection: {str(e)}")
+            QMessageBox.critical(self, "Lỗi", f"Không thể bắt đầu bộ đếm: {str(e)}")
             self.update_ui_state(running=False)
 
     def update_frame(self, frame, count):
@@ -505,17 +556,104 @@ class AppWindow(QWidget):
             self.update_total_weight()
             
         except Exception as e:
-            print(f"Error updating frame: {e}")
+            print(f"Lỗi trong quá trình xử lý khung hình: {e}")
+
+    def toggle_pause(self):
+        """Toggle between pause and resume states"""
+        if not self.detection_thread or not self.detection_thread.isRunning():
+            return
+
+        if self.is_paused:
+            # Resuming from pause
+            if self.changing_camera:
+                # Handle camera change resume
+                self.resume_with_new_camera()
+            else:
+                # Normal resume
+                self.detection_thread.resume()
+                self.is_paused = False
+                self.pause_btn.setText("Tạm dừng")
+                self.update_button.setEnabled(True)
+                self.status_label.setText("Đang đếm")
+        else:
+            # Normal pause operation
+            self.detection_thread.pause()
+            self.is_paused = True
+            self.pause_btn.setText("Tiếp tục")
+            self.update_button.setEnabled(False)
+            self.status_label.setText("Đếm tạm dừng")
+
+
+    def resume_with_new_camera(self):
+            """Handle resuming with a new camera source"""
+            selected_camera = self.camera_combo.currentText()
+            source = None
+
+            try:
+                # Get camera source
+                if selected_camera == "Default":
+                    source = 0
+                else:
+                    source = self.camera_manager.get_camera_url(selected_camera) or DEFAULT_CAMERAS.get(selected_camera)
+                    if not source:
+                        raise ValueError(f"Camera URL không tìm thấy {selected_camera}")
+
+                # Disconnect finished signal before stopping current detection
+                if self.detection_thread:
+                    self.detection_thread.finished.disconnect()
+                    self.detection_thread.stop()
+                    self.detection_thread.wait()
+
+                # Start new detection with preserved count
+                self.detection_thread = DetectionThread(
+                    source,
+                    "Detection Feed",
+                    self.detection_line_position.value(),
+                    self.vertical_radio.isChecked(),
+                    "left_to_right" if self.left_to_right.isChecked() else "right_to_left"
+                )
+                
+                # Set initial count
+                self.detection_thread.bag_count = self.last_bag_count
+                
+                # Connect signals
+                self.detection_thread.update_frame.connect(self.update_frame)
+                self.detection_thread.finished.connect(self.detection_finished)
+                
+                # Start detection
+                self.detection_thread.start()
+
+                # Reset states
+                self.changing_camera = False
+                self.is_paused = False
+                
+                # Update UI
+                self.update_ui_state(running=True)  # Make sure running state is properly set
+                self.pause_btn.setText("Tạm dừng")
+                self.camera_combo.setEnabled(False)
+                self.change_camera_btn.setEnabled(True)
+                self.update_button.setEnabled(True)
+                self.status_label.setText(f"Đã chuyển sang camera: {selected_camera}")
+
+            except Exception as e:
+                QMessageBox.critical(self, "Lỗi", f"Không thể đổi camera: {str(e)}")
+                self.update_ui_state(running=False)
 
     def stop_detection(self):
-        """Stop the detection process"""
+        """Stop the detection process and save record if needed"""
         if self.detection_thread and self.detection_thread.isRunning():
+            current_count = self.detection_thread.bag_count
             self.detection_thread.stop()
             self.detection_thread.wait()
             self.update_ui_state(running=False)
+            
+            # Only save record when explicitly stopping, not during camera changes
+            if current_count > 0:
+                self.save_current_record(current_count)
+            
             self.status_label.setText("Bộ đếm đã ngưng")
             self.video_label.clear()
-
+            self.pause_btn.setText("Tạm dừng")  # Reset pause button text
 
     def update_detection_line(self):
         """Update detection line parameters in real-time"""
@@ -550,13 +688,65 @@ class AppWindow(QWidget):
             self.update_button.setEnabled(False)
 
 
+    def change_camera(self):
+        """Handle camera change while preserving count"""
+        if not self.detection_thread or not self.detection_thread.isRunning():
+            QMessageBox.warning(self, "Lưu ý", "camera không hoạt động!")
+            return
+            
+        if self.current_source_type != "Camera":
+            QMessageBox.warning(self, "Lưu ý", "chỉ có thể đổi camera với bộ đếm dùng camera!")
+            return
+
+        # Store current count
+        self.last_bag_count = self.detection_thread.bag_count
+        
+        # Set states
+        self.changing_camera = True
+        self.is_paused = True
+        
+        # Update UI state
+        self.camera_combo.setEnabled(True)
+        self.pause_btn.setText("Tiếp tục")
+        self.pause_btn.setEnabled(True)
+        self.stop_btn.setEnabled(True)
+        self.change_camera_btn.setEnabled(False)
+        self.update_button.setEnabled(False)
+        
+        # Pause current detection
+        self.detection_thread.pause()
+        
+        self.status_label.setText("Chọn camera mới và bấm Tiếp tục để tiếp tục")
+
+
     def update_ui_state(self, running=False):
         """Update UI elements based on detection state"""
+        # Buttons that are enabled only when NOT running
         self.start_camera_btn.setEnabled(not running)
         self.start_video_btn.setEnabled(not running)
-        self.stop_btn.setEnabled(running)
-        self.camera_combo.setEnabled(not running)
-        self.update_button.setEnabled(running)
+        
+        # Buttons that are enabled during camera change or normal running
+        self.stop_btn.setEnabled(running or self.changing_camera)
+        self.pause_btn.setEnabled(running or self.changing_camera)
+        
+        # Change camera button is only enabled during camera detection
+        self.change_camera_btn.setEnabled(running and 
+                                        not self.changing_camera and 
+                                        self.current_source_type == "Camera")
+        
+        # Update button enabled only during active detection and not paused
+        self.update_button.setEnabled(running and 
+                                    not self.is_paused and 
+                                    not self.changing_camera)
+
+        # Camera combo box is enabled only when changing camera or not running
+        self.camera_combo.setEnabled(not running or self.changing_camera)
+        
+        # Reset states when stopping (only if not changing camera)
+        if not running and not self.changing_camera:
+            self.pause_btn.setText("Tạm dừng")
+            self.is_paused = False
+            self.changing_camera = False
 
     def update_total_weight(self):
         """Update total weight based on weight per bag and count"""
@@ -569,30 +759,37 @@ class AppWindow(QWidget):
 
     def detection_finished(self, count):
         """Handle detection completion"""
-        self.update_ui_state(running=False)
-        self.status_label.setText(f"Bộ đếm kết thúc!")
-        self.save_current_record(count)
-
-    def save_current_record(self, count):
-        """Save detection results"""
-        if not self.customer_name.text() or not self.truck_number.text():
-            return
-                
-        record = {
-            "customer_name": self.customer_name.text(),
-            "order_number": self.order_number.text(),  # Add this line
-            "truck_number": self.truck_number.text(),
-            "commodity": self.commodity.text(),
-            "date_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "weight_per_bag": self.weight_per_bag.text(),
-            "total_weight": self.total_weight.text(),
-            "bag_count": count,
-            "source_type": self.current_source_type,
-            "timestamp": datetime.now().isoformat()
-        }
+        # Only handle finish state if not in camera change mode
+        if not self.changing_camera:
+            self.update_ui_state(running=False)
+            self.status_label.setText(f"Bộ đếm kết thúc!")
             
-        if self.record_manager.add_record(record):
-            self.status_label.setText("Dự liệu đã được lưu")
+            # Only save record on normal completion, not during camera changes
+            if not self.is_paused and count > 0:
+                self.save_current_record(count)
+            
+    def save_current_record(self, count):
+            """Save detection results only if required fields are filled"""
+            try:
+                # Only save if we have the minimum required fields
+                if self.customer_name.text() and self.truck_number.text() and count > 0:
+                    record = {
+                        "customer_name": self.customer_name.text(),
+                        "order_number": self.order_number.text(),
+                        "truck_number": self.truck_number.text(),
+                        "commodity": self.commodity.text(),
+                        "date_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "weight_per_bag": self.weight_per_bag.text(),
+                        "total_weight": self.total_weight.text(),
+                        "bag_count": count,
+                        "source_type": self.current_source_type,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    if self.record_manager.add_record(record):
+                        self.status_label.setText("Dữ liệu đã được lưu")
+            except Exception as e:
+                print(f"Error saving record: {e}")
 
     def load_existing_records(self):
         """Load and display existing detection records"""

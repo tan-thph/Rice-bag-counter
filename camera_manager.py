@@ -30,8 +30,9 @@ CAMERA_BRANDS = {
         "description": "D-Link IP Camera"
     },
     "Generic": {
-        "template": "rtsp://{username}:{password}@{ip}:{port}/{stream}",
+        "template": "rtsp://{username}:{password}@{ip}:{port}/stream{channel}",
         "default_port": "554",
+        "default_channel": "1",
         "description": "Generic RTSP Camera"
     }
 }
@@ -116,7 +117,7 @@ class AddCameraDialog(QDialog):
 
         # Brand selection
         brand_layout = QHBoxLayout()
-        brand_label = QLabel("Nhãn hiệu:")
+        brand_label = QLabel("Nhãn hiệu của NVR:")
         brand_label.setFixedWidth(120)
         self.brand_combo = QComboBox()
         self.brand_combo.addItems(CAMERA_BRANDS.keys())
@@ -291,7 +292,7 @@ class AddCameraDialog(QDialog):
                 "ip": self.ip_input.text(),
                 "port": self.port_input.text(),
                 "channel": self.channel_input.text() if self.channel_input.isVisible() else "",
-                "stream": "stream"
+                "stream": self.channel_input.text() if self.channel_input.isVisible() else ""
             }
             
             url = template.format(**params)
@@ -320,7 +321,7 @@ class AddCameraDialog(QDialog):
                                     "Kết nối với camera thành công!")
                 else:
                     self.show_message("Test thất bại", 
-                                    "Không nhận luồng từ camera",
+                                    "Không thể nhận luồng từ camera",
                                     QMessageBox.Warning)
             else:
                 self.show_message("Test thất bại", 
@@ -329,7 +330,7 @@ class AddCameraDialog(QDialog):
                 
         except Exception as e:
             self.show_message("Lỗi", 
-                            f"Error testing connection: {str(e)}",
+                            f"Đã xảy ra lỗi trong quá trình test: {str(e)}",
                             QMessageBox.Critical)
 
 
