@@ -4,12 +4,12 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLi
 from PyQt5.QtCore import Qt
 import json
 from pathlib import Path
-from main_cv2 import AppWindow  # Import the main application window
+from main_cv2 import AppWindow 
 
 class MasterApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.active_windows = {}  # Store AppWindow instances instead of processes
+        self.active_windows = {} 
         self.initUI()
         self.load_camera_list()
 
@@ -101,7 +101,7 @@ class MasterApp(QWidget):
             try:
                 # Create new AppWindow instance
                 window = AppWindow()
-                window.setWindowTitle(f"Rice Bag Counter - {camera_name}")
+                window.setWindowTitle(f"Bộ đếm bao - {camera_name}")
                 
                 # Store reference to window
                 self.active_windows[camera_name] = window
@@ -154,7 +154,7 @@ class MasterApp(QWidget):
         # Update list based on visible windows
         for camera_name, window in list(self.active_windows.items()):
             if window.isVisible():
-                self.active_list.addItem(f"{camera_name} (Running)")
+                self.active_list.addItem(f"{camera_name} (Đang chạy)")
             else:
                 del self.active_windows[camera_name]
 

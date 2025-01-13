@@ -1,4 +1,4 @@
-import sys, os, json, cv2
+import sys, os, json, cv2, logging
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, 
                            QHBoxLayout, QLabel, QComboBox, QGridLayout, 
                            QLineEdit, QMessageBox, QDoubleSpinBox, QDialog,
@@ -71,7 +71,7 @@ class AppWindow(QWidget):
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(20, 0, 20, 0)  # Add horizontal padding
         
-        copyright_text = QLabel("© 2024 Nhà Máy Xay Xát Gạo Thạnh Hương")
+        copyright_text = QLabel("© 2025 Nhà Máy Xay Xát Gạo Thạnh Hương\nSĐT: 0256 3 836 118")
         copyright_text.setObjectName("copyrightText")
         copyright_text.setAlignment(Qt.AlignCenter)
         footer_layout.addWidget(copyright_text)
@@ -362,7 +362,7 @@ class AppWindow(QWidget):
         position_label.setObjectName("fieldLabel")
         self.detection_line_position = QDoubleSpinBox()
         self.detection_line_position.setRange(0.01, 0.99)
-        self.detection_line_position.setSingleStep(0.1)
+        self.detection_line_position.setSingleStep(0.05)
         self.detection_line_position.setValue(0.5)
         self.detection_line_position.setFixedWidth(100)
         
@@ -640,20 +640,31 @@ class AppWindow(QWidget):
                 self.update_ui_state(running=False)
 
     def stop_detection(self):
-        """Stop the detection process and save record if needed"""
-        if self.detection_thread and self.detection_thread.isRunning():
-            current_count = self.detection_thread.bag_count
-            self.detection_thread.stop()
-            self.detection_thread.wait()
-            self.update_ui_state(running=False)
-            
-            # Only save record when explicitly stopping, not during camera changes
-            if current_count > 0:
-                self.save_current_record(current_count)
-            
-            self.status_label.setText("Bộ đếm đã ngưng")
-            self.video_label.clear()
-            self.pause_btn.setText("Tạm dừng")  # Reset pause button text
+        """Stop the detection process with enhanced cleanup"""
+        try:
+            if self.detection_thread and self.detection_thread.isRunning():
+                current_count = self.detection_thread.bag_count
+                
+                # Stop detection thread
+                self.detection_thread.stop()
+                self.detection_thread.wait()
+                
+                # Clear UI elements
+                self.video_label.clear()
+                self.status_label.setText("Bộ đếm đã ngưng")
+                
+                # Reset all button states and flags
+                self.reset_button_states()
+                
+                # Clear detection thread reference
+                self.detection_thread = None
+                
+        except Exception as e:
+            logging.error(f"Error stopping detection: {str(e)}")
+            self.status_label.setText("Lỗi khi dừng bộ đếm!")
+        finally:
+            # Ensure buttons are reset even if an error occurs
+            self.reset_button_states()
 
     def update_detection_line(self):
         """Update detection line parameters in real-time"""
@@ -720,33 +731,45 @@ class AppWindow(QWidget):
 
 
     def update_ui_state(self, running=False):
-        """Update UI elements based on detection state"""
+        """Update UI elements based on detection state with improved cleanup"""
         # Buttons that are enabled only when NOT running
         self.start_camera_btn.setEnabled(not running)
         self.start_video_btn.setEnabled(not running)
         
-        # Buttons that are enabled during camera change or normal running
-        self.stop_btn.setEnabled(running or self.changing_camera)
-        self.pause_btn.setEnabled(running or self.changing_camera)
-        
-        # Change camera button is only enabled during camera detection
-        self.change_camera_btn.setEnabled(running and 
-                                        not self.changing_camera and 
-                                        self.current_source_type == "Camera")
-        
-        # Update button enabled only during active detection and not paused
-        self.update_button.setEnabled(running and 
-                                    not self.is_paused and 
-                                    not self.changing_camera)
+        if running:
+            # Enable control buttons during active detection
+            self.stop_btn.setEnabled(True)
+            self.pause_btn.setEnabled(True)
+            self.change_camera_btn.setEnabled(
+                not self.changing_camera and 
+                self.current_source_type == "Camera"
+            )
+            self.update_button.setEnabled(not self.is_paused and not self.changing_camera)
+        else:
+            # Disable control buttons when not running
+            self.stop_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.change_camera_btn.setEnabled(False)
+            self.update_button.setEnabled(False)
 
-        # Camera combo box is enabled only when changing camera or not running
-        self.camera_combo.setEnabled(not running or self.changing_camera)
+        # Camera combo box enabled only when changing camera or not running
+        self.camera_combo.setEnabled(self.changing_camera or not running)
+
+    def reset_button_states(self):
+        """Reset all button states to their initial values"""
+        # Call update_ui_state with running=False to reset most buttons
+        self.update_ui_state(running=False)
         
-        # Reset states when stopping (only if not changing camera)
-        if not running and not self.changing_camera:
-            self.pause_btn.setText("Tạm dừng")
-            self.is_paused = False
-            self.changing_camera = False
+        # Additional reset operations
+        self.pause_btn.setText("Tạm dừng")
+        self.is_paused = False
+        self.changing_camera = False
+        
+        # Ensure these buttons are disabled
+        self.pause_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+        self.change_camera_btn.setEnabled(False)
+        self.update_button.setEnabled(False)
 
     def update_total_weight(self):
         """Update total weight based on weight per bag and count"""
