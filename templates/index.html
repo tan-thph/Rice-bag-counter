@@ -179,9 +179,10 @@
         // Function to add data-label attributes to table cells
         function addDataLabelsToTable() {
             const table = document.querySelector('table');
+            if (!table) return;
             const headerCells = table.querySelectorAll('th');
             const rows = table.querySelectorAll('tbody tr');
-    
+
             rows.forEach(row => {
                 const cells = row.querySelectorAll('td');
                 cells.forEach((cell, index) => {
@@ -191,9 +192,6 @@
                 });
             });
         }
-    
-        // Call the function when the component is mounted
-        document.addEventListener('DOMContentLoaded', addDataLabelsToTable);
     </script>
 
     <script>
@@ -429,7 +427,6 @@
                         delete job.newLinePosition;
                         delete job.newLineOrientation;
                         alert('Line updated successfully');
-                        this.captureFrame(jobId);  // Capture a new frame to show the updated line
                     } catch (error) {
                         console.error('Error updating line:', error);
                         let errorMessage = 'Error updating line';
@@ -514,8 +511,7 @@
                     };
                     socket.onmessage = (event) => {
                         const data = JSON.parse(event.data);
-                        console.log(`Received data for job ${jobId}:`, data);
-                        if (data.job_id && data.bag_count !== undefined) {
+                        if (data.job_id && data.bag_count !== undefined && this.activeJobs[data.job_id]) {
                             this.$set(this.activeJobs[data.job_id], 'bag_count', data.bag_count);
                         }
                     };
@@ -524,8 +520,10 @@
                     };
                     socket.onclose = () => {
                         console.log(`WebSocket closed for job ${jobId}`);
-                        // Attempt to reconnect after a short delay
-                        setTimeout(() => this.connectWebSocket(jobId), 5000);
+                        // Only reconnect if the job is still active
+                        if (this.activeJobs[jobId]) {
+                            setTimeout(() => this.connectWebSocket(jobId), 5000);
+                        }
                     };
                     this.sockets[jobId] = socket;
                 },
@@ -555,14 +553,11 @@
                     deep: true,
                     handler(newJobs, oldJobs) {
                         oldJobs = oldJobs || {};
-                        console.log('Active jobs updated:', newJobs);
-                        // Connect WebSocket for new jobs
                         for (const jobId in newJobs) {
                             if (!oldJobs[jobId]) {
                                 this.connectWebSocket(jobId);
                             }
                         }
-                        // Disconnect WebSocket for removed jobs
                         for (const jobId in oldJobs) {
                             if (!newJobs[jobId]) {
                                 this.disconnectWebSocket(jobId);
@@ -571,47 +566,33 @@
                     }
                 }
             },
-                beforeDestroy() {
-                    // Close all WebSocket connections when component is destroyed
-                    for (const jobId in this.sockets) {
-                        this.disconnectWebSocket(jobId);
-                    }
-                },
-                mounted() {
-                    console.log('Initial job results:', initialDataJson.jobResults);
-                    if (initialDataJson.jobResults && initialDataJson.jobResults.length > 0) {
-                        this.jobResults = initialDataJson.jobResults;
-                    }
-                    console.log('Vue instance mounted');
-                    console.log('Initial job results:', this.jobResults);
-                    this.fetchJobs();
+            mounted() {
+                if (initialDataJson.jobResults && initialDataJson.jobResults.length > 0) {
+                    this.jobResults = initialDataJson.jobResults;
+                }
+                this.fetchJobs();
 
-                    this.jobResults = this.jobResults.map((result, index) => ({
-                        ...result,
-                        job_id: result.job_id || `generated_id_${index}`
-                    }));
-                    
-                    // Set initial activeJobs data
-                    this.activeJobs = {...initialDataJson.activeJobs};
-                    
-                    // Initialize WebSocket connections for existing jobs
-                    Object.keys(this.activeJobs).forEach(jobId => {
-                        this.connectWebSocket(jobId);
-                    });
-                    this.$nextTick(() => {
-                        addDataLabelsToTable();
-                    });
-                    // Fetch latest job data every 5 seconds
-                    setInterval(this.fetchLatestJobData, 5000);
-                },
-                beforeDestroy() {
-                // Close all WebSocket connections when component is destroyed
+                this.jobResults = this.jobResults.map((result, index) => ({
+                    ...result,
+                    job_id: result.job_id || `generated_id_${index}`
+                }));
+
+                this.activeJobs = {...initialDataJson.activeJobs};
+
+                Object.keys(this.activeJobs).forEach(jobId => {
+                    this.connectWebSocket(jobId);
+                });
+                this.$nextTick(() => {
+                    addDataLabelsToTable();
+                });
+                this.fetchJobsInterval = setInterval(this.fetchLatestJobData, 5000);
+            },
+            beforeDestroy() {
                 for (const jobId in this.sockets) {
                     this.disconnectWebSocket(jobId);
                 }
-                // Clear the interval
                 clearInterval(this.fetchJobsInterval);
-                },
+            },
             
         });
     </script>

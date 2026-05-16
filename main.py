@@ -3,20 +3,18 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 from ultralytics import YOLO
-import cv2, asyncio, json, os, time, asyncio, logging, base64, uuid, torch, traceback
+import cv2, asyncio, json, os, time, logging, base64, uuid, torch, traceback
 
 from detector import RiceBagDetector
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse  
  
-import numpy as np
 from datetime import datetime
 import tempfile, io
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Union, Optional
 from threading import Lock, Event
 from print import create_job_result_pdf
 
@@ -211,6 +209,7 @@ async def run_rtsp_detection_job(job_id: str):
         logger.error(f"Failed to open RTSP stream: {rtsp_url}")
         add_job_result(job_id, job, "error", 0)
         del active_jobs[job_id]
+        rtsp_detectors.pop(job_id, None)
         return
 
     frame_locks[job_id] = Lock()
@@ -257,7 +256,8 @@ async def run_rtsp_detection_job(job_id: str):
         
         finally:
             cap.release()
-            del frame_locks[job_id]
+            frame_locks.pop(job_id, None)
+            rtsp_detectors.pop(job_id, None)
             if job_id in active_jobs:
                 final_count = active_jobs[job_id]["bag_count"]
                 job_data = active_jobs[job_id]
@@ -359,9 +359,10 @@ async def run_video_detection_job(job_id: str):
             except Exception as e:
                 logger.error(f"Error in process_frames thread for job {job_id}: {str(e)}")
                 logger.error(traceback.format_exc())
-            
-            del frame_locks[job_id]
-            del video_job_events[job_id]
+
+            frame_locks.pop(job_id, None)
+            video_job_events.pop(job_id, None)
+            video_detectors.pop(job_id, None)
             
             # Clean up the video file
             try:
@@ -395,69 +396,16 @@ def add_job_result(job_id: str, job: Union[dict, Job], status: str, final_count:
 async def update_line(job_id: str, update: LineUpdate):
     if job_id not in active_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = active_jobs[job_id]
-    
+
     if update.new_position is not None:
         job["detection_line_position"] = update.new_position
-    
+
     if update.new_orientation is not None:
         job["detection_line_orientation"] = update.new_orientation
-    
+
     return {"message": f"Line updated for job {job_id}", "new_position": job["detection_line_position"], "new_orientation": job["detection_line_orientation"]}
-
-
-@app.post("/upload_video")
-async def upload_video(
-    file: UploadFile = File(...),
-    job_type: str = Form(...),
-    customer_name: str = Form(...),
-    truck_number: str = Form(...),
-    commodity: str = Form(...),
-    weight_per_unit: float = Form(...),
-    order_number: str = Form(...),
-    note: Optional[str] = Form(None),
-    detection_line_orientation: str = Form("vertical"),
-    detection_line_position: float = Form(0.5),
-    desired_direction: int = Form(1),
-    background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    if not file:
-        raise HTTPException(status_code=400, detail="No file uploaded")
-
-    job_id = str(uuid.uuid4())
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
-        temp_file_path = temp_file.name
-        temp_file.write(await file.read())
-
-    try:
-        job = Job(
-            job_type=job_type,
-            customer_name=customer_name,
-            truck_number=truck_number,
-            commodity=commodity,
-            weight_per_unit=weight_per_unit,
-            order_number=order_number,
-            note=note,
-            detection_line_orientation=detection_line_orientation,
-            detection_line_position=detection_line_position,
-            desired_direction=desired_direction,
-            video_path=temp_file_path
-        )
-        active_jobs[job_id] = job.dict()
-        active_jobs[job_id]['bag_count'] = 0
-
-        if job_type == "video":
-            background_tasks.add_task(run_video_detection_job, job_id)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid job type for this endpoint")
-
-        return {"job_id": job_id, "message": "Video uploaded and job created successfully"}
-    except Exception as e:
-        logger.error(f"Error processing video upload: {str(e)}")
-        os.unlink(temp_file_path)
-        raise HTTPException(status_code=500, detail=f"Error processing video upload: {str(e)}")
 
 @app.get("/job_results")
 async def get_job_results():
@@ -494,24 +442,9 @@ async def video_feed(job_id: str):
         while job_id in active_jobs:
             frame_data = active_jobs[job_id].get("current_frame")
             if frame_data is not None:
-                # Decode the JPEG frame
-                frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
-                
-                # The arrow is now drawn in the RiceBagDetector class, so we don't need to modify the frame here
-                
-                # Downscale to 144p
-                small_frame = cv2.resize(frame, (720, 480))
-                
-                # Upscale back to 720p
-                large_frame = cv2.resize(small_frame, (720, 480), interpolation=cv2.INTER_LINEAR)
-                
-                # Encode to JPEG with low quality
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 20]
-                _, buffer = cv2.imencode('.jpg', large_frame, encode_param)
-                
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            await asyncio.sleep(0.033)  # Aim for ~30 FPS
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+            await asyncio.sleep(0.033)  # ~30 FPS
 
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
@@ -552,12 +485,27 @@ def load_jobs_from_file():
     try:
         with open("jobs_data.json", "r") as f:
             data = json.load(f)
-            active_jobs = data["active_jobs"]
-            job_results = data["job_results"]
+            # Any previously active jobs have no running threads after restart;
+            # move them to results with status "interrupted".
+            for job_id, job_data in data.get("active_jobs", {}).items():
+                job_results.append({
+                    "job_id": job_id,
+                    "job_type": job_data.get("job_type", "unknown"),
+                    "date_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "camera": job_data.get("camera", "N/A") if job_data.get("job_type") == "rtsp" else "N/A",
+                    "customer_name": job_data.get("customer_name", "N/A"),
+                    "truck_number": job_data.get("truck_number", "N/A"),
+                    "commodity": job_data.get("commodity", "N/A"),
+                    "weight_per_unit": job_data.get("weight_per_unit", 0),
+                    "order_number": job_data.get("order_number", "N/A"),
+                    "final_count": job_data.get("bag_count", 0),
+                    "status": "interrupted",
+                })
+            job_results.extend(data.get("job_results", []))
     except FileNotFoundError:
         pass  # No saved data yet
     except json.JSONDecodeError:
-        print("Error decoding JSON from jobs_data.json. Starting with empty jobs.")
+        logger.error("Error decoding JSON from jobs_data.json. Starting with empty jobs.")
         active_jobs = {}
         job_results = []
 
@@ -598,16 +546,6 @@ async def stop_job(job_id: str):
     else:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-def update_jobs():
-    serializable_active_jobs = {}
-    for job_id, job_data in active_jobs.items():
-        serializable_job = {k: v for k, v in job_data.items() if k != "current_frame"}
-        serializable_active_jobs[job_id] = serializable_job
-    
-    with open("jobs_data.json", "w") as f:
-        json.dump({"active_jobs": serializable_active_jobs, "job_results": job_results}, f, default=str)
-    pass
-    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9000)
