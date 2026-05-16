@@ -1,54 +1,65 @@
-from fastapi import FastAPI, HTTPException, WebSocket, BackgroundTasks, Request, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import (FastAPI, HTTPException, WebSocket, BackgroundTasks,
+                     Request, WebSocketDisconnect, UploadFile, File, Form)
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
-from typing import List, Optional, Union
+from typing import Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 from ultralytics import YOLO
-import cv2, asyncio, json, os, time, logging, base64, uuid, torch, traceback
+from threading import Lock, Event
+from datetime import datetime
+import cv2, asyncio, json, os, time, logging, base64, uuid, traceback, tempfile
 
 from detector import RiceBagDetector
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse  
- 
-from datetime import datetime
-import tempfile, io
-from fastapi.middleware.cors import CORSMiddleware
-from threading import Lock, Event
 from print import create_job_result_pdf
+
+# ── App setup ─────────────────────────────────────────────────────────────────
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Mount the static directory and set up templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# ── Shared YOLO model ─────────────────────────────────────────────────────────
+# Loaded once at startup and shared across all concurrent jobs.
+# YOLO sets model.conf / model.iou per-instance via RiceBagDetector, so each
+# detector gets its own attribute without reloading weights from disk.
+_MODEL_PATH = "best_n_v15_imgsz224_ep200.pt"
+logger.info(f"Loading YOLO model from {_MODEL_PATH} ...")
+_shared_model = YOLO(_MODEL_PATH)
+_shared_model.fuse()   # fuse Conv+BN layers for faster inference
+logger.info("YOLO model ready.")
+
+# ── Runtime state ─────────────────────────────────────────────────────────────
+
 cameras = {
     "Băng tải 1": "rtsp://tan001:tan001@192.168.0.62/stream1",
-    "Băng tải 2": "rtsp://tan001:tan001@192.168.0.62/stream2"
+    "Băng tải 2": "rtsp://tan001:tan001@192.168.0.62/stream2",
 }
 
-active_jobs = {}
-job_results = []
-connected_clients = {}
-frame_locks = {}
-video_job_events ={}
-rtsp_detectors = {}
-video_detectors = {}
+active_jobs      = {}   # {job_id: dict}
+job_results      = []   # list of completed-job dicts
+connected_clients = {}  # {job_id: set of WebSocket}
+frame_locks      = {}   # {job_id: threading.Lock}
+video_job_events = {}   # {job_id: threading.Event}
+rtsp_detectors   = {}   # {job_id: RiceBagDetector}
+video_detectors  = {}   # {job_id: RiceBagDetector}
 
+# ── Pydantic models ───────────────────────────────────────────────────────────
 
 class Job(BaseModel):
     job_type: str
@@ -71,64 +82,42 @@ class LineUpdate(BaseModel):
 class DesiredDirectionUpdate(BaseModel):
     new_direction: int = Field(..., ge=-1, le=1)
 
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     initial_data = {
         "activeJobs": active_jobs,
         "jobResults": job_results,
-        "cameras": list(cameras.keys())
+        "cameras": list(cameras.keys()),
     }
-    
-    encoded_data = json.dumps(initial_data, default=custom_jsonable_encoder)
-    
+    encoded_data = json.dumps(initial_data, default=_json_encode)
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "initial_data_json": encoded_data
+        "initial_data_json": encoded_data,
     })
 
 @app.get("/cameras")
 async def get_cameras():
     return cameras
 
-
 @app.post("/jobs")
 async def create_job(job: Job, background_tasks: BackgroundTasks):
     if job.job_type == "rtsp" and not job.camera:
         raise HTTPException(status_code=400, detail="Camera is required for RTSP jobs")
-    
+
     job_id = str(uuid.uuid4())
     active_jobs[job_id] = job.dict()
-    active_jobs[job_id]['bag_count'] = 0
-    
+    active_jobs[job_id]["bag_count"] = 0
+
     if job.job_type == "rtsp":
         background_tasks.add_task(run_rtsp_detection_job, job_id)
     elif job.job_type == "video":
         background_tasks.add_task(run_video_detection_job, job_id)
     else:
         raise HTTPException(status_code=400, detail="Invalid job type")
-    
-    return {"job_id": job_id, "message": f"{job.job_type.upper()} job created successfully"}
 
-@app.post("/update_desired_direction/{job_id}")
-async def update_desired_direction(job_id: str, update: DesiredDirectionUpdate):
-    if job_id not in active_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    job = active_jobs[job_id]
-    job["desired_direction"] = update.new_direction
-    
-    # Update the detector's desired direction
-    if job["job_type"] == "rtsp":
-        detector = rtsp_detectors.get(job_id)
-    elif job["job_type"] == "video":
-        detector = video_detectors.get(job_id)
-    else:
-        raise HTTPException(status_code=400, detail="Invalid job type")
-    
-    if detector:
-        detector.update_desired_direction(update.new_direction)
-    
-    return {"message": f"Desired direction updated for job {job_id}", "new_direction": update.new_direction}
+    return {"job_id": job_id, "message": f"{job.job_type.upper()} job created successfully"}
 
 @app.post("/upload_video")
 async def upload_video(
@@ -143,18 +132,16 @@ async def upload_video(
     detection_line_orientation: str = Form("vertical"),
     detection_line_position: float = Form(0.5),
     desired_direction: int = Form(1),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     if not file:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
     job_id = str(uuid.uuid4())
-    
-    # Create a temporary file with a .mp4 extension
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
-        temp_file_path = temp_file.name
-        # Write the uploaded file content to the temporary file
-        temp_file.write(await file.read())
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        tmp_path = tmp.name
+        tmp.write(await file.read())
 
     try:
         job = Job(
@@ -168,383 +155,412 @@ async def upload_video(
             detection_line_orientation=detection_line_orientation,
             detection_line_position=detection_line_position,
             desired_direction=desired_direction,
-            video_path=temp_file_path
+            video_path=tmp_path,
         )
         active_jobs[job_id] = job.dict()
-        active_jobs[job_id]['bag_count'] = 0
+        active_jobs[job_id]["bag_count"] = 0
 
-        if job_type == "video":
-            background_tasks.add_task(run_video_detection_job, job_id)
-        else:
+        if job_type != "video":
             raise HTTPException(status_code=400, detail="Invalid job type for this endpoint")
 
+        background_tasks.add_task(run_video_detection_job, job_id)
         return {"job_id": job_id, "message": "Video uploaded and job created successfully"}
+
     except Exception as e:
-        logger.error(f"Error processing video upload: {str(e)}")
-        os.unlink(temp_file_path)
-        raise HTTPException(status_code=500, detail=f"Error processing video upload: {str(e)}")
+        logger.error(f"Error processing video upload: {e}")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"Error processing video upload: {e}")
 
 @app.get("/jobs")
 async def get_jobs():
     try:
-        jobs = {job_id: {k: v for k, v in job.items() if k != "current_frame"} for job_id, job in active_jobs.items()}
-        return jobs
+        return {
+            job_id: {k: v for k, v in job.items() if k != "current_frame"}
+            for job_id, job in active_jobs.items()
+        }
     except Exception as e:
-        logger.error(f"Error in get_jobs: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.error(f"Error in get_jobs: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-async def run_rtsp_detection_job(job_id: str):
-    job = active_jobs[job_id]
-    detector = RiceBagDetector("best_n_v15_imgsz224_ep200.pt", 
-                               detection_line_position=job["detection_line_position"],
-                               is_vertical=(job["detection_line_orientation"] == "vertical"),
-                               desired_direction=job["desired_direction"])
-    
-    rtsp_detectors[job_id] = detector  # Store the detector instance
-    
-    rtsp_url = cameras.get(job["camera"], job["camera"])
-    cap = cv2.VideoCapture(rtsp_url)
-    
-    if not cap.isOpened():
-        logger.error(f"Failed to open RTSP stream: {rtsp_url}")
-        add_job_result(job_id, job, "error", 0)
-        del active_jobs[job_id]
-        rtsp_detectors.pop(job_id, None)
-        return
-
-    frame_locks[job_id] = Lock()
-
-    def process_frames():
-        nonlocal cap, detector
-        while job_id in active_jobs:
-            ret, frame = cap.read()
-            if not ret:
-                logger.warning(f"Failed to read frame from RTSP stream: {rtsp_url}")
-                break
-            
-            # Update detector's line position and orientation if they have changed
-            if detector.detection_line_position != active_jobs[job_id]["detection_line_position"]:
-                detector.update_line_position(active_jobs[job_id]["detection_line_position"])
-            
-            if detector.is_vertical != (active_jobs[job_id]["detection_line_orientation"] == "vertical"):
-                detector.update_line_orientation(active_jobs[job_id]["detection_line_orientation"] == "vertical")
-            
-            processed_frame, bag_count = detector.process_frame(frame)
-            
-            with frame_locks[job_id]:
-                active_jobs[job_id]["bag_count"] = bag_count
-                _, buffer = cv2.imencode('.jpg', processed_frame)
-                active_jobs[job_id]["current_frame"] = buffer.tobytes()
-
-            time.sleep(0.033)  # Aim for ~30 FPS
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(process_frames)
-        
-        try:
-            while job_id in active_jobs:
-                if future.done():
-                    break
-                await asyncio.sleep(1)
-                
-                with frame_locks[job_id]:
-                    bag_count = active_jobs[job_id]["bag_count"]
-                
-                if job_id in connected_clients:
-                    for websocket in connected_clients[job_id]:
-                        await websocket.send_json({"job_id": job_id, "bag_count": bag_count})
-        
-        finally:
-            cap.release()
-            frame_locks.pop(job_id, None)
-            rtsp_detectors.pop(job_id, None)
-            if job_id in active_jobs:
-                final_count = active_jobs[job_id]["bag_count"]
-                job_data = active_jobs[job_id]
-                del active_jobs[job_id]
-                add_job_result(job_id, job_data, "completed", final_count)
-                update_jobs()
-
-
-async def run_video_detection_job(job_id: str):
-    job = active_jobs[job_id]
-    detector = RiceBagDetector("best_n_v15_imgsz224_ep200.pt", 
-                               detection_line_position=job["detection_line_position"],
-                               is_vertical=(job["detection_line_orientation"] == "vertical"),
-                               desired_direction=job["desired_direction"])
-    
-    video_detectors[job_id] = detector  # Store the detector instance
-    
-    cap = cv2.VideoCapture(job["video_path"])
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_time = 1 / fps if fps > 0 else 0.033  # Default to 30 FPS if unable to get FPS
-    
-    if not cap.isOpened():
-        logger.error(f"Failed to open video file: {job['video_path']}")
-        add_job_result(job_id, job, "error", 0)
-        del active_jobs[job_id]
-        return
-
-    frame_locks[job_id] = Lock()
-    video_job_events[job_id] = Event()
-
-    def process_frames():
-        nonlocal cap, detector
-        frame_count = 0
-        while job_id in active_jobs and not video_job_events[job_id].is_set():
-            try:
-                ret, frame = cap.read()
-                if not ret:
-                    logger.info(f"Reached end of video for job {job_id}")
-                    break
-
-                frame_count += 1
-                logger.debug(f"Processing frame {frame_count} for job {job_id}")
-                
-                # Update detector's line position and orientation if they have changed
-                if detector.detection_line_position != active_jobs[job_id]["detection_line_position"]:
-                    detector.update_line_position(active_jobs[job_id]["detection_line_position"])
-                
-                if detector.is_vertical != (active_jobs[job_id]["detection_line_orientation"] == "vertical"):
-                    detector.update_line_orientation(active_jobs[job_id]["detection_line_orientation"] == "vertical")
-                
-                processed_frame, bag_count = detector.process_frame(frame)
-                
-                with frame_locks[job_id]:
-                    active_jobs[job_id]["bag_count"] = bag_count
-                    _, buffer = cv2.imencode('.jpg', processed_frame)
-                    active_jobs[job_id]["current_frame"] = buffer.tobytes()
-
-                time.sleep(frame_time)
-
-            except Exception as e:
-                logger.error(f"Error processing frame {frame_count} for job {job_id}: {str(e)}")
-                logger.error(traceback.format_exc())
-                # If there's an error, we'll skip this frame and continue with the next one
-                continue
-
-        cap.release()
-        logger.info(f"Video job {job_id} finished processing")
-        if job_id in active_jobs:
-            final_count = active_jobs[job_id]["bag_count"]
-            job_data = active_jobs[job_id]
-            del active_jobs[job_id]
-            add_job_result(job_id, job_data, "completed", final_count)
-            update_jobs()
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(process_frames)
-        
-        try:
-            while job_id in active_jobs and not video_job_events[job_id].is_set():
-                if future.done():
-                    break
-                await asyncio.sleep(1)
-                
-                with frame_locks[job_id]:
-                    bag_count = active_jobs[job_id]["bag_count"]
-                
-                if job_id in connected_clients:
-                    for websocket in connected_clients[job_id]:
-                        await websocket.send_json({"job_id": job_id, "bag_count": bag_count})
-        
-        except Exception as e:
-            logger.error(f"Error in run_video_detection_job for job {job_id}: {str(e)}")
-            logger.error(traceback.format_exc())
-        
-        finally:
-            video_job_events[job_id].set()  # Signal the thread to stop
-            try:
-                future.result()  # Wait for the thread to finish
-            except Exception as e:
-                logger.error(f"Error in process_frames thread for job {job_id}: {str(e)}")
-                logger.error(traceback.format_exc())
-
-            frame_locks.pop(job_id, None)
-            video_job_events.pop(job_id, None)
-            video_detectors.pop(job_id, None)
-            
-            # Clean up the video file
-            try:
-                os.unlink(job["video_path"])
-            except Exception as e:
-                logger.error(f"Error removing temporary video file: {str(e)}")
-
-def add_job_result(job_id: str, job: Union[dict, Job], status: str, final_count: int):
-    if isinstance(job, dict):
-        job_data = job
-    elif isinstance(job, Job):
-        job_data = job.dict()
-    else:
-        raise ValueError("Job must be either a dictionary or a Job object")
-
-    job_results.append({
-        "job_id": job_id,
-        "job_type": job_data.get("job_type", "unknown"),
-        "date_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "camera": job_data.get("camera", "N/A") if job_data.get("job_type") == "rtsp" else "N/A",
-        "customer_name": job_data.get("customer_name", "N/A"),
-        "truck_number": job_data.get("truck_number", "N/A"),
-        "commodity": job_data.get("commodity", "N/A"),
-        "weight_per_unit": job_data.get("weight_per_unit", 0),
-        "order_number": job_data.get("order_number", "N/A"),
-        "final_count": final_count,
-        "status": status
-    })
+@app.get("/job_results")
+async def get_job_results():
+    return job_results
 
 @app.post("/update_line/{job_id}")
 async def update_line(job_id: str, update: LineUpdate):
     if job_id not in active_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Read both detection-line fields together under the frame lock so the
+    # processing thread always sees a consistent pair.
+    lock = frame_locks.get(job_id)
+    if lock:
+        with lock:
+            job = active_jobs[job_id]
+            if update.new_position is not None:
+                job["detection_line_position"] = update.new_position
+            if update.new_orientation is not None:
+                job["detection_line_orientation"] = update.new_orientation
+    else:
+        job = active_jobs[job_id]
+        if update.new_position is not None:
+            job["detection_line_position"] = update.new_position
+        if update.new_orientation is not None:
+            job["detection_line_orientation"] = update.new_orientation
+
+    return {
+        "message": f"Line updated for job {job_id}",
+        "new_position": job["detection_line_position"],
+        "new_orientation": job["detection_line_orientation"],
+    }
+
+@app.post("/update_desired_direction/{job_id}")
+async def update_desired_direction(job_id: str, update: DesiredDirectionUpdate):
+    if job_id not in active_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     job = active_jobs[job_id]
+    job["desired_direction"] = update.new_direction
 
-    if update.new_position is not None:
-        job["detection_line_position"] = update.new_position
+    detector = (rtsp_detectors if job["job_type"] == "rtsp" else video_detectors).get(job_id)
+    if detector:
+        detector.update_desired_direction(update.new_direction)
 
-    if update.new_orientation is not None:
-        job["detection_line_orientation"] = update.new_orientation
+    return {"message": f"Desired direction updated for job {job_id}",
+            "new_direction": update.new_direction}
 
-    return {"message": f"Line updated for job {job_id}", "new_position": job["detection_line_position"], "new_orientation": job["detection_line_orientation"]}
+@app.post("/stop_job/{job_id}")
+async def stop_job(job_id: str):
+    if job_id not in active_jobs:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-@app.get("/job_results")
-async def get_job_results():
-    return job_results
+    job         = active_jobs[job_id]
+    final_count = job["bag_count"]
+    job_model   = Job(**{k: v for k, v in job.items() if k in Job.__annotations__})
 
-def custom_jsonable_encoder(obj):
-    if isinstance(obj, bytes):
-        return base64.b64encode(obj).decode('utf-8')
-    return jsonable_encoder(obj)
+    if job["job_type"] == "video" and job_id in video_job_events:
+        video_job_events[job_id].set()   # signal processing thread to stop
+        # Do NOT delete the temp file here — run_video_detection_job's finally
+        # block does it after the thread has actually released the file handle.
 
-def generate_frames(job_id: str):
-    fps = 10
-    frame_interval = 1 / fps
-    
-    while job_id in active_jobs:
-        start_time = time.time()
-        
-        frame_data = active_jobs[job_id].get("current_frame")
-        if frame_data is not None:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-        
-        processing_time = time.time() - start_time
-        if processing_time < frame_interval:
-            time.sleep(frame_interval - processing_time)
+    del active_jobs[job_id]
+    _notify_clients_job_ended(job_id)
+    add_job_result(job_id, job_model, "stopped", final_count)
+    update_jobs()
+    return {"message": f"Job {job_id} stopped successfully"}
 
 @app.get("/video_feed/{job_id}")
 async def video_feed(job_id: str):
-    job = active_jobs.get(job_id)
-    if not job:
+    if job_id not in active_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     async def generate():
         while job_id in active_jobs:
-            frame_data = active_jobs[job_id].get("current_frame")
+            lock = frame_locks.get(job_id)
+            if lock:
+                with lock:
+                    frame_data = active_jobs.get(job_id, {}).get("current_frame")
+            else:
+                frame_data = active_jobs.get(job_id, {}).get("current_frame")
+
             if frame_data is not None:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-            await asyncio.sleep(0.033)  # ~30 FPS
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n")
+            await asyncio.sleep(0.033)   # ~30 FPS
 
-    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
-
+    return StreamingResponse(generate(),
+                             media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.websocket("/ws/{job_id}")
 async def websocket_endpoint(websocket: WebSocket, job_id: str):
     await websocket.accept()
-    if job_id not in connected_clients:
-        connected_clients[job_id] = set()
-    connected_clients[job_id].add(websocket)
+    connected_clients.setdefault(job_id, set()).add(websocket)
     try:
         while True:
             if job_id in active_jobs:
-                await websocket.send_json({"job_id": job_id, "bag_count": active_jobs[job_id].get("bag_count", 0)})
+                count = active_jobs[job_id].get("bag_count", 0)
+                try:
+                    await websocket.send_json({"job_id": job_id, "bag_count": count})
+                except Exception:
+                    break   # client gone — exit cleanly
+            else:
+                # Job has ended; notify the client so it can refresh results.
+                try:
+                    await websocket.send_json({"job_id": job_id, "status": "ended"})
+                except Exception:
+                    pass
+                break
             await asyncio.sleep(1)
     except WebSocketDisconnect:
-        connected_clients[job_id].remove(websocket)
-        if not connected_clients[job_id]:
-            del connected_clients[job_id]
-
+        pass
+    finally:
+        connected_clients.get(job_id, set()).discard(websocket)
+        if not connected_clients.get(job_id):
+            connected_clients.pop(job_id, None)
 
 @app.get("/print_job_result/{job_id}")
 async def print_job_result(job_id: str):
-    job_result = next((result for result in job_results if result["job_id"] == job_id), None)
+    job_result = next((r for r in job_results if r["job_id"] == job_id), None)
     if not job_result:
         raise HTTPException(status_code=404, detail="Job result not found")
-
     pdf_buffer = create_job_result_pdf(job_result)
-    
-    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=job_result_{job_id}.pdf"})
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=job_result_{job_id}.pdf"},
+    )
 
-def save_jobs_to_file():
+# ── Background job runners ────────────────────────────────────────────────────
+
+async def run_rtsp_detection_job(job_id: str):
+    job      = active_jobs[job_id]
+    detector = RiceBagDetector(
+        _shared_model,
+        detection_line_position=job["detection_line_position"],
+        is_vertical=(job["detection_line_orientation"] == "vertical"),
+        desired_direction=job["desired_direction"],
+    )
+    rtsp_detectors[job_id] = detector
+
+    rtsp_url = cameras.get(job["camera"], job["camera"])
+    cap = cv2.VideoCapture(rtsp_url)
+    # Ask OpenCV/FFMPEG to time out stalled reads instead of blocking forever.
+    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5_000)
+    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000)
+
+    if not cap.isOpened():
+        logger.error(f"Failed to open RTSP stream: {rtsp_url}")
+        add_job_result(job_id, job, "error", 0)
+        active_jobs.pop(job_id, None)
+        rtsp_detectors.pop(job_id, None)
+        return
+
+    frame_locks[job_id] = Lock()
+    last_frame_time = time.monotonic()
+
+    def process_frames():
+        nonlocal last_frame_time
+        while job_id in active_jobs:
+            t0 = time.monotonic()
+            ret, frame = cap.read()
+
+            if not ret:
+                # Stall detection: if no frame for 10 s the stream is dead.
+                if time.monotonic() - last_frame_time > 10:
+                    logger.warning(f"RTSP stream stalled for job {job_id}")
+                    break
+                time.sleep(0.05)
+                continue
+
+            last_frame_time = time.monotonic()
+
+            # Read detection-line settings atomically with the frame lock.
+            with frame_locks[job_id]:
+                line_pos    = active_jobs[job_id]["detection_line_position"]
+                line_orient = active_jobs[job_id]["detection_line_orientation"]
+
+            if detector.detection_line_position != line_pos:
+                detector.update_line_position(line_pos)
+            if detector.is_vertical != (line_orient == "vertical"):
+                detector.update_line_orientation(line_orient == "vertical")
+
+            processed_frame, bag_count = detector.process_frame(frame)
+
+            with frame_locks[job_id]:
+                active_jobs[job_id]["bag_count"] = bag_count
+                _, buf = cv2.imencode(".jpg", processed_frame)
+                active_jobs[job_id]["current_frame"] = buf.tobytes()
+
+            # Sleep only the time remaining in the target interval.
+            elapsed = time.monotonic() - t0
+            sleep_s = max(0.0, 0.033 - elapsed)
+            if sleep_s:
+                time.sleep(sleep_s)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(process_frames)
+        try:
+            while job_id in active_jobs:
+                if future.done():
+                    break
+                await asyncio.sleep(1)
+        finally:
+            cap.release()
+            frame_locks.pop(job_id, None)
+            rtsp_detectors.pop(job_id, None)
+            _notify_clients_job_ended(job_id)
+            if job_id in active_jobs:
+                final_count = active_jobs[job_id]["bag_count"]
+                job_data    = active_jobs.pop(job_id)
+                add_job_result(job_id, job_data, "completed", final_count)
+                update_jobs()
+
+
+async def run_video_detection_job(job_id: str):
+    job      = active_jobs[job_id]
+    detector = RiceBagDetector(
+        _shared_model,
+        detection_line_position=job["detection_line_position"],
+        is_vertical=(job["detection_line_orientation"] == "vertical"),
+        desired_direction=job["desired_direction"],
+    )
+    video_detectors[job_id] = detector
+
+    cap = cv2.VideoCapture(job["video_path"])
+    fps        = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_time = 1.0 / fps
+
+    if not cap.isOpened():
+        logger.error(f"Failed to open video file: {job['video_path']}")
+        add_job_result(job_id, job, "error", 0)
+        active_jobs.pop(job_id, None)
+        return
+
+    frame_locks[job_id]      = Lock()
+    video_job_events[job_id] = Event()
+
+    def process_frames():
+        frame_count = 0
+        while job_id in active_jobs and not video_job_events[job_id].is_set():
+            t0 = time.monotonic()
+            try:
+                ret, frame = cap.read()
+                if not ret:
+                    logger.info(f"End of video for job {job_id}")
+                    break
+
+                frame_count += 1
+
+                with frame_locks[job_id]:
+                    line_pos    = active_jobs[job_id]["detection_line_position"]
+                    line_orient = active_jobs[job_id]["detection_line_orientation"]
+
+                if detector.detection_line_position != line_pos:
+                    detector.update_line_position(line_pos)
+                if detector.is_vertical != (line_orient == "vertical"):
+                    detector.update_line_orientation(line_orient == "vertical")
+
+                processed_frame, bag_count = detector.process_frame(frame)
+
+                with frame_locks[job_id]:
+                    active_jobs[job_id]["bag_count"] = bag_count
+                    _, buf = cv2.imencode(".jpg", processed_frame)
+                    active_jobs[job_id]["current_frame"] = buf.tobytes()
+
+            except Exception as e:
+                logger.error(f"Frame {frame_count} error for job {job_id}: {e}")
+                logger.debug(traceback.format_exc())
+
+            elapsed = time.monotonic() - t0
+            sleep_s = max(0.0, frame_time - elapsed)
+            if sleep_s:
+                time.sleep(sleep_s)
+
+        cap.release()
+        logger.info(f"Video job {job_id} processing finished")
+
+        if job_id in active_jobs:
+            final_count = active_jobs[job_id]["bag_count"]
+            job_data    = active_jobs.pop(job_id)
+            add_job_result(job_id, job_data, "completed", final_count)
+            update_jobs()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(process_frames)
+        try:
+            while job_id in active_jobs and not video_job_events[job_id].is_set():
+                if future.done():
+                    break
+                await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"run_video_detection_job error for {job_id}: {e}")
+            logger.debug(traceback.format_exc())
+        finally:
+            video_job_events[job_id].set()  # signal thread if not already
+            try:
+                future.result(timeout=10)   # wait for thread to release file
+            except Exception as e:
+                logger.error(f"process_frames thread error for {job_id}: {e}")
+
+            frame_locks.pop(job_id, None)
+            video_job_events.pop(job_id, None)
+            video_detectors.pop(job_id, None)
+            _notify_clients_job_ended(job_id)
+
+            # Safe to delete temp file only after thread has finished and
+            # released the VideoCapture handle.
+            try:
+                os.unlink(job["video_path"])
+            except OSError as e:
+                logger.error(f"Could not delete temp video file: {e}")
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _notify_clients_job_ended(job_id: str):
+    """Remove the connected-clients entry for a finished job."""
+    connected_clients.pop(job_id, None)
+
+def add_job_result(job_id: str, job: Union[dict, Job], status: str, final_count: int):
+    job_data = job if isinstance(job, dict) else job.dict()
+    job_results.append({
+        "job_id":          job_id,
+        "job_type":        job_data.get("job_type", "unknown"),
+        "date_time":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "camera":          job_data.get("camera", "N/A") if job_data.get("job_type") == "rtsp" else "N/A",
+        "customer_name":   job_data.get("customer_name", "N/A"),
+        "truck_number":    job_data.get("truck_number", "N/A"),
+        "commodity":       job_data.get("commodity", "N/A"),
+        "weight_per_unit": job_data.get("weight_per_unit", 0),
+        "order_number":    job_data.get("order_number", "N/A"),
+        "final_count":     final_count,
+        "status":          status,
+    })
+
+def _json_encode(obj):
+    if isinstance(obj, bytes):
+        return base64.b64encode(obj).decode("utf-8")
+    return jsonable_encoder(obj)
+
+def update_jobs():
+    serialisable = {
+        jid: {k: v for k, v in jdata.items() if k != "current_frame"}
+        for jid, jdata in active_jobs.items()
+    }
     with open("jobs_data.json", "w") as f:
-        json.dump({"active_jobs": active_jobs, "job_results": job_results}, f)
+        json.dump({"active_jobs": serialisable, "job_results": job_results},
+                  f, default=str)
 
 def load_jobs_from_file():
-    global active_jobs, job_results
+    global job_results
     try:
         with open("jobs_data.json", "r") as f:
             data = json.load(f)
-            # Any previously active jobs have no running threads after restart;
-            # move them to results with status "interrupted".
-            for job_id, job_data in data.get("active_jobs", {}).items():
-                job_results.append({
-                    "job_id": job_id,
-                    "job_type": job_data.get("job_type", "unknown"),
-                    "date_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "camera": job_data.get("camera", "N/A") if job_data.get("job_type") == "rtsp" else "N/A",
-                    "customer_name": job_data.get("customer_name", "N/A"),
-                    "truck_number": job_data.get("truck_number", "N/A"),
-                    "commodity": job_data.get("commodity", "N/A"),
-                    "weight_per_unit": job_data.get("weight_per_unit", 0),
-                    "order_number": job_data.get("order_number", "N/A"),
-                    "final_count": job_data.get("bag_count", 0),
-                    "status": "interrupted",
-                })
-            job_results.extend(data.get("job_results", []))
+        # Previously active jobs have no running threads after restart;
+        # surface them as interrupted results rather than phantom active jobs.
+        for job_id, job_data in data.get("active_jobs", {}).items():
+            job_results.append({
+                "job_id":          job_id,
+                "job_type":        job_data.get("job_type", "unknown"),
+                "date_time":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "camera":          job_data.get("camera", "N/A") if job_data.get("job_type") == "rtsp" else "N/A",
+                "customer_name":   job_data.get("customer_name", "N/A"),
+                "truck_number":    job_data.get("truck_number", "N/A"),
+                "commodity":       job_data.get("commodity", "N/A"),
+                "weight_per_unit": job_data.get("weight_per_unit", 0),
+                "order_number":    job_data.get("order_number", "N/A"),
+                "final_count":     job_data.get("bag_count", 0),
+                "status":          "interrupted",
+            })
+        job_results.extend(data.get("job_results", []))
     except FileNotFoundError:
-        pass  # No saved data yet
+        pass
     except json.JSONDecodeError:
-        logger.error("Error decoding JSON from jobs_data.json. Starting with empty jobs.")
-        active_jobs = {}
-        job_results = []
+        logger.error("jobs_data.json is corrupt — starting with empty state.")
 
-# Call this function when the server starts
 load_jobs_from_file()
-
-# Call this function whenever jobs are updated
-def update_jobs():
-    serializable_active_jobs = {}
-    for job_id, job_data in active_jobs.items():
-        serializable_job = {k: v for k, v in job_data.items() if k != "current_frame"}
-        serializable_active_jobs[job_id] = serializable_job
-    with open("jobs_data.json", "w") as f:
-        json.dump({"active_jobs": serializable_active_jobs, "job_results": job_results}, f, default=str)
-
-@app.post("/stop_job/{job_id}")
-async def stop_job(job_id: str):
-    if job_id in active_jobs:
-        job = active_jobs[job_id]
-        job_model = Job(**{k: v for k, v in job.items() if k in Job.__annotations__})
-        final_count = job["bag_count"]
-        
-        if job["job_type"] == "video":
-            if job_id in video_job_events:
-                video_job_events[job_id].set()  # Signal the video processing thread to stop
-            if "video_path" in job:
-                try:
-                    os.remove(job["video_path"])
-                except FileNotFoundError:
-                    logger.warning(f"Video file not found: {job['video_path']}")
-                except Exception as e:
-                    logger.error(f"Error removing video file: {str(e)}")
-        
-        del active_jobs[job_id]
-        add_job_result(job_id, job_model, "stopped", final_count)
-        update_jobs()
-        return {"message": f"Job {job_id} stopped successfully"}
-    else:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
 if __name__ == "__main__":
     import uvicorn

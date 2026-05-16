@@ -511,6 +511,13 @@
                     };
                     socket.onmessage = (event) => {
                         const data = JSON.parse(event.data);
+                        if (data.status === 'ended') {
+                            // Server signals the job finished — remove it and
+                            // refresh results so the table updates automatically.
+                            this.$delete(this.activeJobs, data.job_id);
+                            this.fetchJobs();
+                            return;
+                        }
                         if (data.job_id && data.bag_count !== undefined && this.activeJobs[data.job_id]) {
                             this.$set(this.activeJobs[data.job_id], 'bag_count', data.bag_count);
                         }
