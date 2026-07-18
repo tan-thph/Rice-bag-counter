@@ -25,6 +25,10 @@ class TrackedBag:
         self.committed_zone = zone if zone in ('A', 'B') else None
         self.frames_missing = 0
         self.velocity       = (0.0, 0.0)                   # smoothed px/frame
+        # Net +1s this bag has contributed to bag_count so far. Lets a
+        # reverse move only undo a crossing this same bag actually earned
+        # (see RiceBagDetector._apply_count).
+        self.count_contribution = 0
 
     @property
     def center(self):
@@ -132,32 +136,61 @@ class RiceBagDetector:
 
     # ── Tracking helpers ──────────────────────────────────────────────────────
 
-    def _match_to_track(self, center, already_matched):
+    def _match_detections_to_tracks(self, detections):
         """
-        Greedy nearest-predicted-centre match.
+        Global greedy nearest-neighbour matching.
+
+        Detections are matched to tracks in ascending distance order across
+        the *whole frame*, not in whatever order YOLO happened to emit boxes.
+        Matching one detection at a time (in YOLO's arbitrary output order)
+        lets an earlier detection claim a track it merely satisfies the
+        threshold for, even when a later detection in the same frame is a far
+        closer match for that same track — misattributing the zone
+        transition (and therefore the count) to the wrong physical bag
+        whenever two bags are near each other, which is most often exactly
+        at the counting line. Sorting all candidate pairs first and
+        committing the closest ones fixes that order-dependence.
+
         Threshold expands with ghost age and bag speed to handle fast bags
         that were missing for several frames.
+
+        Returns {detection_index: track_id} for matched detections.
         """
-        best_id   = None
-        best_dist = float('inf')
+        candidates = []
+        for det_idx, (center, bbox, conf, zone) in enumerate(detections):
+            for bag_id, bag in self.tracked_bags.items():
+                pred  = bag.predicted_center
+                dist  = ((center[0] - pred[0]) ** 2 + (center[1] - pred[1]) ** 2) ** 0.5
+                speed = (bag.velocity[0] ** 2 + bag.velocity[1] ** 2) ** 0.5
+                threshold = BASE_MATCH_DIST + speed * bag.frames_missing
+                if dist < threshold:
+                    candidates.append((dist, det_idx, bag_id))
 
-        for bag_id, bag in self.tracked_bags.items():
-            if bag_id in already_matched:
+        candidates.sort(key=lambda c: c[0])
+
+        matched_dets  = set()
+        matched_bags  = set()
+        assignment    = {}
+        for dist, det_idx, bag_id in candidates:
+            if det_idx in matched_dets or bag_id in matched_bags:
                 continue
-            pred  = bag.predicted_center
-            dist  = ((center[0] - pred[0]) ** 2 + (center[1] - pred[1]) ** 2) ** 0.5
-            speed = (bag.velocity[0] ** 2 + bag.velocity[1] ** 2) ** 0.5
-            threshold = BASE_MATCH_DIST + speed * bag.frames_missing
-            if dist < threshold and dist < best_dist:
-                best_dist = dist
-                best_id   = bag_id
+            assignment[det_idx] = bag_id
+            matched_dets.add(det_idx)
+            matched_bags.add(bag_id)
 
-        return best_id
+        return assignment
 
     def _apply_count(self, bag, old_committed):
         """
         Fire a count change when committed_zone transitions A↔B.
         'crossing' and None are ignored — only full-zone commits count.
+
+        A bag whose track was first created already fully inside a zone
+        (e.g. the belt extends beyond the camera's view) never earns a +1
+        for that starting position — only an observed crossing counts. If
+        such a bag later moves to the other zone, that must not manufacture
+        a spurious -1: only undo a crossing this same bag actually
+        contributed earlier, tracked via bag.count_contribution.
         """
         new_committed = bag.committed_zone
         if old_committed is None or new_committed is None:
@@ -169,8 +202,10 @@ class RiceBagDetector:
 
         if direction == self.desired_direction:
             self.bag_count += 1
-        else:
+            bag.count_contribution += 1
+        elif bag.count_contribution > 0:
             self.bag_count = max(0, self.bag_count - 1)
+            bag.count_contribution -= 1
 
     # ── Drawing helpers ───────────────────────────────────────────────────────
 
@@ -255,11 +290,12 @@ class RiceBagDetector:
                                    float(box.conf), zone))
 
             # ── Match detections → tracks ──────────────────────────────────
-            next_tracked = {}
-            matched_ids  = set()
+            next_tracked   = {}
+            matched_ids    = set()
+            assignment     = self._match_detections_to_tracks(detections)
 
-            for center, bbox, conf, zone in detections:
-                track_id = self._match_to_track(center, matched_ids)
+            for det_idx, (center, bbox, conf, zone) in enumerate(detections):
+                track_id = assignment.get(det_idx)
 
                 if track_id is not None:
                     matched_ids.add(track_id)

@@ -345,34 +345,49 @@ async def run_rtsp_detection_job(job_id: str):
         nonlocal last_frame_time
         while job_id in active_jobs:
             t0 = time.monotonic()
-            ret, frame = cap.read()
+            try:
+                ret, frame = cap.read()
 
-            if not ret:
-                # Stall detection: if no frame for 10 s the stream is dead.
-                if time.monotonic() - last_frame_time > 10:
-                    logger.warning(f"RTSP stream stalled for job {job_id}")
+                if not ret:
+                    # Stall detection: if no frame for 10 s the stream is dead.
+                    if time.monotonic() - last_frame_time > 10:
+                        logger.warning(f"RTSP stream stalled for job {job_id}")
+                        break
+                    time.sleep(0.05)
+                    continue
+
+                last_frame_time = time.monotonic()
+
+                # stop_job() can delete active_jobs[job_id] from the asyncio
+                # thread at any point after the while-check above; guard the
+                # dict access so that race doesn't surface as an uncaught
+                # KeyError on this background thread.
+                if job_id not in active_jobs:
                     break
-                time.sleep(0.05)
-                continue
 
-            last_frame_time = time.monotonic()
+                # Read detection-line settings atomically with the frame lock.
+                with frame_locks[job_id]:
+                    line_pos    = active_jobs[job_id]["detection_line_position"]
+                    line_orient = active_jobs[job_id]["detection_line_orientation"]
 
-            # Read detection-line settings atomically with the frame lock.
-            with frame_locks[job_id]:
-                line_pos    = active_jobs[job_id]["detection_line_position"]
-                line_orient = active_jobs[job_id]["detection_line_orientation"]
+                if detector.detection_line_position != line_pos:
+                    detector.update_line_position(line_pos)
+                if detector.is_vertical != (line_orient == "vertical"):
+                    detector.update_line_orientation(line_orient == "vertical")
 
-            if detector.detection_line_position != line_pos:
-                detector.update_line_position(line_pos)
-            if detector.is_vertical != (line_orient == "vertical"):
-                detector.update_line_orientation(line_orient == "vertical")
+                processed_frame, bag_count = detector.process_frame(frame)
 
-            processed_frame, bag_count = detector.process_frame(frame)
-
-            with frame_locks[job_id]:
-                active_jobs[job_id]["bag_count"] = bag_count
-                _, buf = cv2.imencode(".jpg", processed_frame)
-                active_jobs[job_id]["current_frame"] = buf.tobytes()
+                with frame_locks[job_id]:
+                    if job_id not in active_jobs:
+                        break
+                    active_jobs[job_id]["bag_count"] = bag_count
+                    _, buf = cv2.imencode(".jpg", processed_frame)
+                    active_jobs[job_id]["current_frame"] = buf.tobytes()
+            except KeyError:
+                # Job was stopped concurrently; exit cleanly instead of
+                # propagating an exception that would be silently dropped
+                # by the executor.
+                break
 
             # Sleep only the time remaining in the target interval.
             elapsed = time.monotonic() - t0

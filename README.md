@@ -127,6 +127,8 @@ For a **horizontal** line, the same logic applies to `y_min` / `y_max`.
 
 `committed_zone` only updates when the bag is fully inside A or B. A count fires only when `committed_zone` changes — so a bag that grazes the line and retreats never triggers a false count.
 
+Each track also remembers its own net contribution to the total (`count_contribution`). A bag whose track starts life already fully inside a zone (e.g. the belt extends beyond the camera's view) never earns a `+1` for that starting position — only an observed crossing counts. If such a bag is later pushed back to the other zone, that reverse move only decrements the total if this same bag previously earned a `+1`; otherwise there is nothing to undo and the total is left alone. Without this, a bag that merely starts inside Zone B and later bounces to Zone A would wrongly subtract one from the count it never added to.
+
 ### Ghost Tracking
 
 ```
@@ -329,7 +331,7 @@ self.model.iou  = 0.45   # NMS IoU threshold.
 - **Occlusion sensitivity** — heavily stacked or overlapping bags may be detected as one, causing undercounting.
 
 ### Tracking
-- **Greedy matching only** — detections are matched to tracks in detection order, not globally optimised (Hungarian algorithm). In dense scenes with many simultaneous bags, ID switches are possible.
+- **Greedy matching only** — all detection↔track candidate pairs in the frame are sorted by distance and matched closest-first (not detection-arrival order), but this is still not globally optimised like the Hungarian algorithm. In dense scenes with many simultaneous bags, ID switches are still possible, just less likely than with a naive per-detection greedy scan.
 - **Ghost timeout** — if a bag disappears for more than `MAX_FRAMES_MISSING` frames (default ≈ 0.67 s), its track is dropped. A bag that is occluded longer than this will be assigned a new ID and may be missed or double-counted.
 - **No appearance features** — matching is purely distance-based. Bags that look different from each other are not exploited for better association.
 
